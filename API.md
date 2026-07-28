@@ -594,11 +594,11 @@ classified below requires an admin session.
 | --- | --- | --- |
 | **public read** | anyone | `GET /api/printers`, `GET /api/analytics/daily`, `GET /api/cameras/health`, `GET /api/maintenance`, `GET /api/maintenance/notifications`, `GET /api/printers/:id/maintenance`, `GET /api/settings/maintenance-intervals`, `GET /api/settings/favicon`, `GET /api/events`, `GET /api/status-light/devices`, `GET /api/status-light/printers/:id`, branding/layout reads |
 | **viewer-gated read** | anyone when `VITE_PUBLIC_VIEWER_MODE=true`, else any session | `GET /api/queue`, `GET /api/maintenance/summary` — public only while the anonymous viewer dashboard is enabled; otherwise a session is required so a non-public deployment doesn't leak queue contents / fleet health |
-| **admin read** | admin only | `GET /api/users`, `GET /api/slicer-keys`, `GET /api/audit-logs`, `GET /api/admin/update-status`, `GET /api/admin/backup/download`, `GET /api/notifications/*`, `GET /api/manager/requests`, `GET /api/settings/saml`, `GET /api/settings/home-assistant*`, `GET /api/status-light/provisioning` |
+| **admin read** | admin only | `GET /api/users`, `GET /api/slicer-keys`, `GET /api/audit-logs`, `GET /api/admin/update-status`, `GET /api/admin/update/preflight`, `GET /api/admin/update/runs*`, `GET /api/admin/backup/download`, `GET /api/notifications/*`, `GET /api/manager/requests`, `GET /api/settings/saml`, `GET /api/settings/home-assistant*`, `GET /api/status-light/provisioning` |
 | **public mutation** | anyone | `POST /api/queue/submit` (student intake), `POST /api/manager/request`, the auth endpoints above |
 | **operator** | operator or admin | `POST /api/printers` (create/edit/reorder), `POST /api/printers/:id/command`, `POST /api/queue/:id/printed`, `POST /api/maintenance/:id/complete`, `POST /api/maintenance/notifications/read` |
 | **authed** | any session | `POST /api/audit-logs` (actor is taken from the session, not the body) |
-| **admin** | admin only | `DELETE /api/printers/:id`, `DELETE /api/queue/:id`, `/api/queue/reset`, `/api/analytics/daily/reset`, all `/api/users/*` writes, all `/api/slicer-keys` writes, `/api/notifications/*` writes, `/api/settings/*` writes, `POST /api/admin/update/apply`, `POST /api/admin/backup/restore`, manager request approve/deny/delete |
+| **admin** | admin only | `DELETE /api/printers/:id`, `DELETE /api/queue/:id`, `/api/queue/reset`, `/api/analytics/daily/reset`, all `/api/users/*` writes, all `/api/slicer-keys` writes, `/api/notifications/*` writes, `/api/settings/*` writes, `POST /api/admin/update/apply`, `POST /api/admin/update/rollback`, `POST /api/admin/update/runs/:id/cancel`, `POST /api/admin/backup/restore`, manager request approve/deny/delete |
 
 > **Connection-secret redaction:** `GET /api/printers` and `GET /api/printers/:id`
 > return connection fields (`ipAddress`, `serial`, `url`, `callbackUrl`) only to an
@@ -666,12 +666,61 @@ Denials return `401` (no/expired session) or `403` (insufficient role).
 
 Lets a deployed site detect that a newer version has been published and (when a Watchtower sidecar is wired up) apply it in place. Both are **admin only** (cookie session); the apply is CSRF same-origin-gated and audited.
 
+An update is tracked as a durable **run** in `update_runs` (+ `update_run_events`
+for its log), created before the updater is triggered. This matters because the
+update replaces the very container serving these endpoints: the browser is only
+ever a viewer of server-side state, so progress survives closing the tab, and the
+freshly recreated container's watchdog re-attaches to the in-flight run on boot
+and finishes verifying it.
+
 | Method & path | Description |
 |---------------|-------------|
-| `GET /api/admin/update-status` | Compares the running image's baked commit SHA against the latest commit on the tracked GitHub branch (cached ~20 min server-side). Pass `?force=1` (the UI's "Check again" button) to bypass the TTL cache and re-poll GitHub immediately so a just-pushed commit shows up right away. Returns `{ enabled, current, latest, updateAvailable, latestCommittedAt, checkedAt, canApply }`. When `UPDATE_CHECK_REPO` is unset → `{ enabled: false, current }`. On an upstream failure → `{ enabled: true, current, error }`. `canApply` reflects whether `WATCHTOWER_TOKEN` is configured. Cached `no-store`. |
-| `POST /api/admin/update/apply` | Triggers the Watchtower sidecar (`WATCHTOWER_URL` + `WATCHTOWER_TOKEN`) to pull the newer `:latest` images and recreate the app containers. `202 { started: true }` on success — also returned if the request to Watchtower is still outstanding after 5 minutes (a backstop, not a real failure: the trigger already reached Watchtower, which may still be mid-pull or may have already recreated this `web` container). `503` when no updater is configured; `502` only on a genuine connect failure (Watchtower unreachable). Writes an audit-log entry (`action: software.update.apply`). The update itself runs entirely server-side via Watchtower, independent of the client connection — closing the browser tab after the trigger succeeds does not stop or affect it. |
+| `GET /api/admin/update-status` | Compares the running image's baked commit SHA against the latest commit on the tracked GitHub branch (cached ~20 min server-side). Pass `?force=1` (the UI's "Check again" button) to bypass the TTL cache and re-poll GitHub immediately so a just-pushed commit shows up right away. Returns `{ enabled, current, latest, updateAvailable, latestCommittedAt, checkedAt, canApply, versionSource, canRollback, rollbackTarget, pinnedVersion, activeRunId }`. When `UPDATE_CHECK_REPO` is unset → `{ enabled: false, current }`. On an upstream failure the run/rollback fields are still returned alongside `error`. `versionSource` is `baked` (a real commit SHA, the only comparable case), `dev`, or `build-id`; `updateAvailable` is never true unless it is `baked`. `pinnedVersion` is set when the running version is the result of a deliberate rollback, so the UI reports "pinned" instead of re-offering the update that was just reverted. Cached `no-store`. |
+| `GET /api/admin/update/preflight` | Runs the pre-flight checks with no side effects. `?kind=update` (default) or `rollback`. Returns `{ ok, blocking, checks: [{ id, label, severity, ok, detail }] }`. See the check table below. |
+| `GET /api/admin/update/runs?limit=20` | Update history, newest first (limit 1–100, default 20). `{ runs: [...] }`. |
+| `GET /api/admin/update/runs/active` | The in-flight run and its log, or `{ run: null, events: [] }`. Polled by the UI every 3 s. |
+| `GET /api/admin/update/runs/:id` | One run plus its event log. `404` when unknown. |
+| `POST /api/admin/update/apply` | Runs pre-flight, creates the run, triggers Watchtower, returns `202 { started: true, runId }` immediately (the watchdog owns the run from there). `409 { error, checks }` when a blocking pre-flight check fails; `409 { error, runId }` when another run is already in flight; `503` when no updater is configured. Audited (`software.update.apply`, and `software.update.succeeded` on completion). |
+| `POST /api/admin/update/rollback` | Body `{ targetVersion }` (7–40 hex chars). Dispatches `.github/workflows/rollback.yml` to re-point the `:latest` tags at that commit's `sha-<12>` images, then triggers Watchtower. `202 { started: true, runId }`. `400` on a malformed SHA, `409` on failed pre-flight or a run already in flight, `503` when `UPDATE_ROLLBACK_TOKEN` is unset. Audited (`software.update.rollback`). |
+| `POST /api/admin/update/runs/:id/cancel` | Abandons a wedged run so the concurrency guard is released. **Does not stop an update already underway** — nothing can, once Watchtower has been triggered. `409` if the run already finished. Audited (`software.update.cancel`). |
 
-Version detection relies on `APP_VERSION` (the git SHA baked into the image by `.github/workflows/deploy.yml`); the one-click apply relies on `docker-compose.deploy.yml` (pulls published images + runs the Watchtower sidecar). Both are documented in `.env.example`.
+**Run states.** `queued` → `retagging` (rollback only) → `triggering` →
+`applying` → `verifying` → one of `succeeded` / `failed` / `timed_out` /
+`cancelled`. Every transition is conditional on the expected current state,
+because the old and new containers can overlap briefly during a Watchtower
+recreate; the loser of a race no-ops rather than double-advancing.
+
+A run only reaches `succeeded` after the new version posts
+`UPDATE_HEALTH_PASSES` (default 3) consecutive `/readyz` passes at least 5 s
+apart. A container that boots on the new SHA and then crash-loops therefore never
+succeeds — it stays in `verifying` until `deadline_at` and lands in `timed_out`,
+which is when the UI offers the rollback.
+
+**Pre-flight checks.** `block` severity is a hard failure with **no override**;
+`warn` is surfaced in the confirm dialog and recorded into `update_runs.preflight`.
+
+| id | Severity | Meaning |
+|----|----------|---------|
+| `version-stamped` | block | The build has a real commit SHA (not a local/dev build) |
+| `db-reachable` | block | Database responds; restarting with it down risks in-flight writes |
+| `updater-reachable` | block | The Watchtower sidecar is listening |
+| `active-prints` | warn | Printers currently printing. The prints keep running — printers print autonomously — but polling and webcams drop for ~a minute |
+| `queue-in-flight` | warn | Unprinted queue jobs (they are in the database and survive) |
+| `backup-fresh` | warn | A backup was recorded in the last 24 h |
+| `migration-forward-only` | warn | Always present — see below |
+| `rollback-available` | info (block for a rollback run) | `UPDATE_ROLLBACK_TOKEN` is configured |
+
+> **Rolling back does not roll back the database.** Migrations
+> (`MIGRATIONS` in `server/postgres.js`) are forward-only and are never
+> un-applied, so an older image must tolerate the newer schema. Each run records
+> the migration high-water mark in `update_runs.schema_version` so the UI can
+> name the exact version being crossed.
+
+`update_runs` / `update_run_events` are **excluded from backup/restore**:
+restoring an old snapshot would otherwise resurrect a stale in-flight row whose
+unique `active_guard` index would then reject every future update.
+
+Version detection relies on `APP_VERSION` (the git SHA baked into the image by `.github/workflows/deploy.yml`, which also publishes an immutable `sha-<12>` tag per service so rollback has a target); the one-click apply relies on `docker-compose.deploy.yml` (pulls published images + runs the Watchtower sidecar, scoped with `--label-enable` so it only ever touches the six app containers, never `db`/`redis`). Rollback additionally needs `UPDATE_ROLLBACK_TOKEN` — a fine-grained GitHub PAT limited to this repo with `Actions: write`, deliberately **not** a registry-write credential, so a compromised web container can only redeploy a commit CI already built rather than push arbitrary images. All documented in `.env.example`.
 
 ### Backup & Restore (admin — Settings → System)
 

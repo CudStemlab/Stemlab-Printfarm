@@ -159,6 +159,12 @@ function sensitiveReadCapability(p) {
   if (p === '/api/slicer-keys' || p.startsWith('/api/slicer-keys/')) return CAP.KEYS_ADMIN;
   if (p === '/api/audit-logs') return CAP.AUDIT_READ;
   if (p === '/api/admin/update-status') return CAP.SETTINGS_ADMIN;
+  // Update pre-flight and run history. These MUST be classified here: an
+  // unclassified GET falls through to CAP.AUTHED below, which would let any
+  // signed-in viewer read the farm's deploy history and pre-flight detail
+  // (printer names, queue depth, backup recency).
+  if (p === '/api/admin/update/preflight') return CAP.SETTINGS_ADMIN;
+  if (p === '/api/admin/update/runs' || p.startsWith('/api/admin/update/runs/')) return CAP.SETTINGS_ADMIN;
   if (p === '/api/admin/backup/download') return CAP.SETTINGS_ADMIN;
   if (p === '/api/network-usage' || p === '/api/network-usage/live') return CAP.AUDIT_READ;
   if (p.startsWith('/api/notifications/')) return CAP.NOTIFICATIONS_ADMIN;
@@ -213,6 +219,12 @@ function adminMutationCapability(method, p) {
   if (p.startsWith('/api/slicer-keys/') && method === 'DELETE') return CAP.KEYS_ADMIN;
   if (p === '/api/admin/credential' && method === 'PUT') return CAP.SETTINGS_ADMIN;
   if (p === '/api/admin/update/apply' && method === 'POST') return CAP.SETTINGS_ADMIN;
+  // Rollback republishes older images farm-wide; cancel releases the update
+  // concurrency guard. Both would already land on SETTINGS_ADMIN via the
+  // default-deny mutation fallback — listed explicitly so the policy is
+  // readable rather than implied.
+  if (p === '/api/admin/update/rollback' && method === 'POST') return CAP.SETTINGS_ADMIN;
+  if (p.startsWith('/api/admin/update/runs/') && p.endsWith('/cancel') && method === 'POST') return CAP.SETTINGS_ADMIN;
   if (p === '/api/admin/backup/restore' && method === 'POST') return CAP.SETTINGS_ADMIN;
   if (p.startsWith('/api/notifications/')) return CAP.NOTIFICATIONS_ADMIN;
   if (p === '/api/settings/saml' || p === '/api/settings/saml/test') return CAP.SETTINGS_ADMIN;

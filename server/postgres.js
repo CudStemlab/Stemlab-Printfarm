@@ -477,6 +477,62 @@ const MIGRATIONS = [
         );
     `,
   },
+  {
+    version: 5,
+    name: 'update-runs-history',
+    // Durable state for the admin software-update flow. Previously an update was
+    // fire-and-forget: the progress log lived in React state and died with the
+    // browser tab (while the UI claimed it was "safe to close"), and there was no
+    // history at all. Persisting the run here is what lets the freshly recreated
+    // web container pick the run back up on boot, verify the new version's health,
+    // and offer a rollback target.
+    //
+    // active_guard is the concurrency guard. Postgres does not collide NULLs in a
+    // unique index, so any number of finished runs (guard NULL) coexist while at
+    // most one in-flight run may hold TRUE — a second admin's INSERT fails with
+    // 23505. Durable and multi-process safe, unlike a module-level JS flag that
+    // would vanish with the very container being replaced.
+    //
+    // schema_version records MAX(schema_migrations.version) at run start so the UI
+    // can tell an admin exactly how many forward-only migrations a rollback would
+    // cross — migrations are never un-applied by rolling an image back.
+    sql: `
+      CREATE TABLE IF NOT EXISTS update_runs (
+        id BIGSERIAL PRIMARY KEY,
+        kind TEXT NOT NULL DEFAULT 'update',
+        state TEXT NOT NULL,
+        from_version TEXT NOT NULL,
+        to_version TEXT,
+        target_tag TEXT,
+        schema_version INTEGER,
+        actor_name TEXT,
+        actor_username TEXT,
+        actor_role TEXT,
+        preflight JSONB,
+        health JSONB,
+        error TEXT,
+        active_guard BOOLEAN,
+        started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        deadline_at TIMESTAMPTZ NOT NULL,
+        finished_at TIMESTAMPTZ
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS update_runs_single_active_idx
+        ON update_runs (active_guard);
+      CREATE INDEX IF NOT EXISTS update_runs_started_idx
+        ON update_runs (started_at DESC);
+
+      CREATE TABLE IF NOT EXISTS update_run_events (
+        id BIGSERIAL PRIMARY KEY,
+        run_id BIGINT NOT NULL REFERENCES update_runs(id) ON DELETE CASCADE,
+        at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        level TEXT NOT NULL DEFAULT 'info',
+        message TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS update_run_events_run_idx
+        ON update_run_events (run_id, id);
+    `,
+  },
 ];
 
 // Advisory lock id for the migration run (distinct from the baseline's 90210), so
@@ -2582,6 +2638,208 @@ export async function listAuditLogs(limit = 200) {
   return result.rows[0].data;
 }
 
+// ── Software update runs ────────────────────────────────────────────────────
+// Durable state for the admin update/rollback flow (migration #5). The whole
+// point of persisting this is that the update replaces the very container doing
+// the updating: the run is written here before Watchtower is triggered, and the
+// freshly recreated web container's watchdog reads it back on boot to finish
+// verification. Nothing here may hold infrastructure detail — `error` and event
+// messages are rendered in the browser (see the sanitizing note in app.js).
+
+// Non-terminal states hold active_guard = TRUE; the unique index on that column
+// is what makes "only one update at a time" a database invariant.
+const UPDATE_RUN_ACTIVE_STATES = ['queued', 'retagging', 'triggering', 'applying', 'verifying'];
+
+function updateRunRowToJs(row) {
+  if (!row) return null;
+  const iso = (value) => (value ? new Date(value).toISOString() : null);
+  return {
+    id: Number(row.id),
+    kind: row.kind,
+    state: row.state,
+    fromVersion: row.from_version,
+    toVersion: row.to_version,
+    targetTag: row.target_tag,
+    schemaVersion: row.schema_version === null ? null : Number(row.schema_version),
+    actorName: row.actor_name,
+    actorUsername: row.actor_username,
+    actorRole: row.actor_role,
+    preflight: row.preflight || null,
+    health: row.health || null,
+    error: row.error,
+    active: UPDATE_RUN_ACTIVE_STATES.includes(row.state),
+    startedAt: iso(row.started_at),
+    updatedAt: iso(row.updated_at),
+    deadlineAt: iso(row.deadline_at),
+    finishedAt: iso(row.finished_at),
+  };
+}
+
+// Creates the run in state 'queued'. Throws a plain Error tagged
+// `conflict = true` when another run is already in flight, so the route can map
+// it to 409 without importing pg error codes.
+export async function createUpdateRun({
+  kind = 'update',
+  fromVersion,
+  toVersion = null,
+  targetTag = null,
+  actorName = null,
+  actorUsername = null,
+  actorRole = null,
+  preflight = null,
+  deadlineMs,
+}) {
+  await ensureSchema();
+  // Snapshot the applied migration high-water mark so the UI can say exactly how
+  // many forward-only migrations a rollback from here would cross.
+  const schemaVersion = await query('SELECT COALESCE(MAX(version), 0) AS version FROM schema_migrations')
+    .then((r) => Number(r.rows[0].version))
+    .catch(() => null);
+  try {
+    const result = await query(
+      `
+      INSERT INTO update_runs (
+        kind, state, from_version, to_version, target_tag, schema_version,
+        actor_name, actor_username, actor_role, preflight, active_guard, deadline_at
+      ) VALUES ($1, 'queued', $2, $3, $4, $5, $6, $7, $8, $9, TRUE, NOW() + ($10 || ' milliseconds')::interval)
+      RETURNING *
+      `,
+      [
+        kind, fromVersion, toVersion, targetTag, schemaVersion,
+        actorName, actorUsername, actorRole,
+        preflight ? JSON.stringify(preflight) : null,
+        String(Math.max(60000, Number(deadlineMs) || 900000)),
+      ],
+    );
+    return updateRunRowToJs(result.rows[0]);
+  } catch (error) {
+    if (error && error.code === '23505') {
+      const conflict = new Error('An update is already running');
+      conflict.conflict = true;
+      throw conflict;
+    }
+    throw error;
+  }
+}
+
+// Applied-migration high-water mark. Surfaced in preflight so the rollback
+// warning can name the actual schema version rather than a vague "migrations may
+// not be reversible".
+export async function currentSchemaVersion() {
+  await ensureSchema();
+  const result = await query('SELECT COALESCE(MAX(version), 0) AS version FROM schema_migrations');
+  return Number(result.rows[0].version);
+}
+
+export async function getActiveUpdateRun() {
+  await ensureSchema();
+  const result = await query('SELECT * FROM update_runs WHERE active_guard IS TRUE LIMIT 1');
+  return updateRunRowToJs(result.rows[0] || null);
+}
+
+export async function getUpdateRun(id) {
+  await ensureSchema();
+  const runId = Number.parseInt(id, 10);
+  if (!Number.isFinite(runId)) return null;
+  const result = await query('SELECT * FROM update_runs WHERE id = $1', [runId]);
+  return updateRunRowToJs(result.rows[0] || null);
+}
+
+export async function listUpdateRuns(limit = 20) {
+  await ensureSchema();
+  const safeLimit = Math.min(Math.max(Number.parseInt(limit, 10) || 20, 1), 100);
+  const result = await query(
+    'SELECT * FROM update_runs ORDER BY started_at DESC, id DESC LIMIT $1',
+    [safeLimit],
+  );
+  return result.rows.map(updateRunRowToJs);
+}
+
+// The most recent successfully completed forward update — its from_version is
+// the "last known good" an admin would roll back to.
+export async function lastSuccessfulUpdateRun() {
+  await ensureSchema();
+  const result = await query(
+    `SELECT * FROM update_runs
+     WHERE state = 'succeeded' AND kind = 'update'
+     ORDER BY finished_at DESC NULLS LAST, id DESC LIMIT 1`,
+  );
+  return updateRunRowToJs(result.rows[0] || null);
+}
+
+// The version currently pinned by a deliberate rollback, or null. Used to stop
+// the card from immediately re-offering the update you just rolled away from.
+export async function lastRollbackUpdateRun() {
+  await ensureSchema();
+  const result = await query(
+    `SELECT * FROM update_runs
+     WHERE state = 'succeeded' AND kind = 'rollback'
+     ORDER BY finished_at DESC NULLS LAST, id DESC LIMIT 1`,
+  );
+  return updateRunRowToJs(result.rows[0] || null);
+}
+
+export async function appendUpdateRunEvent(runId, message, level = 'info') {
+  await ensureSchema();
+  const id = Number.parseInt(runId, 10);
+  if (!Number.isFinite(id)) return;
+  await query(
+    'INSERT INTO update_run_events (run_id, level, message) VALUES ($1, $2, $3)',
+    [id, level, String(message).slice(0, 500)],
+  );
+}
+
+export async function listUpdateRunEvents(runId, limit = 200) {
+  await ensureSchema();
+  const id = Number.parseInt(runId, 10);
+  if (!Number.isFinite(id)) return [];
+  const safeLimit = Math.min(Math.max(Number.parseInt(limit, 10) || 200, 1), 1000);
+  const result = await query(
+    'SELECT at, level, message FROM update_run_events WHERE run_id = $1 ORDER BY id ASC LIMIT $2',
+    [id, safeLimit],
+  );
+  return result.rows.map((row) => ({
+    at: new Date(row.at).toISOString(),
+    level: row.level,
+    message: row.message,
+  }));
+}
+
+// Conditional transition: only moves the run when it is still in `fromState`.
+// The old and new web containers can overlap briefly during a Watchtower
+// recreate (it replaces services one at a time, and a poller/nginx restart does
+// not kill web), so two watchdogs can race the same run — the loser updates 0
+// rows and no-ops instead of double-advancing the state machine.
+export async function transitionUpdateRun(runId, fromState, toState, patch = {}) {
+  await ensureSchema();
+  const id = Number.parseInt(runId, 10);
+  if (!Number.isFinite(id)) return null;
+  const terminal = ['succeeded', 'failed', 'timed_out', 'cancelled'].includes(toState);
+  const result = await query(
+    `
+    UPDATE update_runs SET
+      state = $3,
+      to_version = COALESCE($4, to_version),
+      health = COALESCE($5::jsonb, health),
+      error = COALESCE($6, error),
+      updated_at = NOW(),
+      finished_at = CASE WHEN $7 THEN NOW() ELSE finished_at END,
+      -- NULLing the guard is what frees the unique index for the next run.
+      active_guard = CASE WHEN $7 THEN NULL ELSE TRUE END
+    WHERE id = $1 AND state = $2
+    RETURNING *
+    `,
+    [
+      id, fromState, toState,
+      patch.toVersion ?? null,
+      patch.health ? JSON.stringify(patch.health) : null,
+      patch.error ?? null,
+      terminal,
+    ],
+  );
+  return updateRunRowToJs(result.rows[0] || null);
+}
+
 // ── Filament Station (SpoolBuddy port) ──────────────────────────────────────
 
 function filamentSpoolRowToJs(row) {
@@ -2852,8 +3110,11 @@ export async function recordAssignmentTriggerResult(id, { success, message }) {
 // with foreign keys in this schema (→ printers, → filament_spools), so it
 // must be inserted last; TRUNCATE names every table in one statement, so it's
 // order-independent there. Deliberately excluded: schema_migrations
-// (app-managed, not user data) and poller_health (ephemeral, repopulates on
-// the poller's next cycle).
+// (app-managed, not user data), poller_health (ephemeral, repopulates on
+// the poller's next cycle), and update_runs / update_run_events — restoring an
+// old backup would otherwise resurrect a stale active_guard = TRUE row, and the
+// unique index on that column would then reject every future update with
+// "an update is already running", permanently wedging the feature.
 const BACKUP_TABLES = [
   'printers',
   'filament_spools',

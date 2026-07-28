@@ -146,6 +146,24 @@ services:
       # returns 503.
       WATCHTOWER_URL: ${WATCHTOWER_URL:-http://watchtower:8080/v1/update}
       WATCHTOWER_TOKEN: ${WATCHTOWER_TOKEN:-}
+      # Rollback (admin "Roll back" button). Watchtower can only re-pull the same
+      # tag, so rolling back means re-pointing `:latest` in the registry — done by
+      # .github/workflows/rollback.yml, which this token lets the web server
+      # dispatch. Use a FINE-GRAINED GitHub PAT scoped to this one repository with
+      # `Actions: read and write` and nothing else: that way a compromised web
+      # container can only re-deploy a commit CI already built, never push
+      # arbitrary images. Empty = rollback button hidden, endpoint returns 503.
+      # IMAGE_PREFIX lets the server check a sha-* tag exists before offering it.
+      UPDATE_ROLLBACK_TOKEN: ${UPDATE_ROLLBACK_TOKEN:-}
+      UPDATE_ROLLBACK_WORKFLOW: ${UPDATE_ROLLBACK_WORKFLOW:-rollback.yml}
+      IMAGE_PREFIX: ${IMAGE_PREFIX:-}
+      # Update-run lifecycle. DEADLINE_MS bounds a whole run before it is marked
+      # timed_out (pull + recreate + verify); HEALTH_PASSES is how many consecutive
+      # /readyz passes the new version must post before the run counts as
+      # succeeded — >1 so a container that boots and then crash-loops is caught
+      # instead of being reported as a successful update.
+      UPDATE_RUN_DEADLINE_MS: ${UPDATE_RUN_DEADLINE_MS:-900000}
+      UPDATE_HEALTH_PASSES: ${UPDATE_HEALTH_PASSES:-3}
       # ESP32 status-light MQTT broker (server/statusLightBroker.js). MQTT_PORT
       # is the HOST port the raw-TCP listener is published on below (the
       # container always listens on 1883); the provisioning endpoint hands it to

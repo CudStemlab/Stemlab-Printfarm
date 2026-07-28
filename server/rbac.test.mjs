@@ -70,6 +70,38 @@ t('sensitive reads resolve to their admin capability', () => {
 t('queue file read is operator-tier', () => {
   assert.equal(requiredCapability('GET', '/api/queue/j1/file'), CAP.QUEUE_FILES_READ);
 });
+// Software-update reads. These are only admin because they are listed in
+// sensitiveReadCapability(); an unclassified GET would fall through to AUTHED
+// and expose deploy history + pre-flight detail to any signed-in viewer.
+t('software update reads are admin-only', () => {
+  assert.equal(requiredCapability('GET', '/api/admin/update-status'), CAP.SETTINGS_ADMIN);
+  assert.equal(requiredCapability('GET', '/api/admin/update/preflight'), CAP.SETTINGS_ADMIN);
+  assert.equal(requiredCapability('GET', '/api/admin/update/runs'), CAP.SETTINGS_ADMIN);
+  assert.equal(requiredCapability('GET', '/api/admin/update/runs/active'), CAP.SETTINGS_ADMIN);
+  assert.equal(requiredCapability('GET', '/api/admin/update/runs/42'), CAP.SETTINGS_ADMIN);
+});
+t('software update mutations are admin-only', () => {
+  assert.equal(requiredCapability('POST', '/api/admin/update/apply'), CAP.SETTINGS_ADMIN);
+  assert.equal(requiredCapability('POST', '/api/admin/update/rollback'), CAP.SETTINGS_ADMIN);
+  assert.equal(requiredCapability('POST', '/api/admin/update/runs/42/cancel'), CAP.SETTINGS_ADMIN);
+});
+t('non-admin roles cannot reach the update surface', () => {
+  for (const path of [
+    '/api/admin/update-status',
+    '/api/admin/update/preflight',
+    '/api/admin/update/runs',
+    '/api/admin/update/runs/active',
+  ]) {
+    assert.equal(decide(null, 'GET', path), '401');
+    assert.equal(decide(ROLE.VIEWER, 'GET', path), '403');
+    assert.equal(decide(ROLE.OPERATOR, 'GET', path), '403');
+    assert.equal(decide(ROLE.TECHNICIAN, 'GET', path), '403');
+    assert.equal(decide(ROLE.ADMIN, 'GET', path), 'allow');
+  }
+  assert.equal(decide(ROLE.OPERATOR, 'POST', '/api/admin/update/rollback'), '403');
+  assert.equal(decide(ROLE.TECHNICIAN, 'POST', '/api/admin/update/apply'), '403');
+  assert.equal(decide(ROLE.ADMIN, 'POST', '/api/admin/update/rollback'), 'allow');
+});
 t('unclassified read default-denies to AUTHED', () => {
   assert.equal(requiredCapability('GET', '/api/filament-station/spools'), CAP.AUTHED);
   assert.equal(requiredCapability('GET', '/api/brand-new-read'), CAP.AUTHED);
