@@ -1,8 +1,9 @@
 name: Security Smoke Test
 
 # Runs the read-only security smoke test (scripts/security-smoke.sh) against the
-# live deployment on a schedule and on demand. GET/HEAD only — no logins,
-# mutations, or brute force — so it is safe to run against production.
+# live deployment. Manual only — trigger it from the Actions tab (Run workflow);
+# there is no schedule. GET/HEAD only — no logins, mutations, or brute force —
+# so it is safe to run against production.
 #
 # Configuration (Settings → Secrets and variables → Actions):
 #   Variable  SMOKE_BASE_URL   deployment URL (defaults to the script's default
@@ -16,8 +17,6 @@ name: Security Smoke Test
 # failure — wiring the smoke test into failed-check monitoring.
 
 on:
-  schedule:
-    - cron: '17 6 * * *' # daily at 06:17 UTC (off the top-of-hour rush)
   workflow_dispatch:
     inputs:
       base_url:
