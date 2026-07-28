@@ -658,6 +658,11 @@ export default defineConfig(({ mode }) => {
           // Only referenced via a dynamic import in statusLightSerial.ts —
           // keep it out of the eager vendor chunk so it loads on demand.
           if (id.includes('esptool-js')) return 'esptool'
+          // Same deal: three (core plus the STL/OBJ/3MF loaders, OrbitControls
+          // and the fflate copy vendored inside the package for 3MF) is only
+          // reached through the React.lazy import in QueueModelViewerDialog, so
+          // it gets its own chunk that never touches first paint.
+          if (id.includes('/node_modules/three/')) return 'three'
           if (
             id.includes('/node_modules/react/') ||
             id.includes('/node_modules/react-dom/') ||

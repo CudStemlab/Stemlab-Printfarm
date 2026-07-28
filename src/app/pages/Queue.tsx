@@ -212,6 +212,10 @@ export function Queue() {
   const totalFiles = queue.reduce((acc, job) => acc + (job.fileCount ?? 1), 0);
   const canDeleteQueueJobs = user?.role === 'admin';
   const canDownloadQueueFiles = !isReadOnlyRole(user?.role);
+  // Previewing renders the stored model bytes in the browser, so it is scoped to
+  // the same people who can act on a job. The server gate is unchanged either
+  // way — GET /api/queue/:id/file still requires the queue:files:read capability.
+  const canPreviewQueueFiles = canManageQueue;
   const canExport = !isReadOnlyRole(user?.role);
 
   const handleExportExcel = () => {
@@ -303,6 +307,7 @@ export function Queue() {
                     canManage={canManageQueue}
                     canDelete={canDeleteQueueJobs}
                     canDownload={canDownloadQueueFiles}
+                    canPreview={canPreviewQueueFiles}
                   />
                 </div>
               </div>
@@ -341,6 +346,7 @@ export function Queue() {
                       canManage={false}
                       canDelete={canDeleteQueueJobs}
                       canDownload={canDownloadQueueFiles}
+                      canPreview={canPreviewQueueFiles}
                     />
                   </div>
                 </div>
