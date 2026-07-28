@@ -69,7 +69,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "eslint_config",
-      "community": 51,
+      "community": 126,
       "norm_label": "eslint.config.js"
     },
     {
@@ -1089,7 +1089,7 @@
       "source_location": "L74",
       "_origin": "ast",
       "id": "poller_bambuclient_onmessage",
-      "community": 33,
+      "community": 92,
       "norm_label": ".onmessage()"
     },
     {
@@ -1099,7 +1099,7 @@
       "source_location": "",
       "_origin": "ast",
       "id": "message",
-      "community": 33,
+      "community": 92,
       "norm_label": "message"
     },
     {
@@ -1229,7 +1229,7 @@
       "source_location": "L422",
       "_origin": "ast",
       "id": "go_services_cmd_poller_bambu_spoolgrams",
-      "community": 92,
+      "community": 37,
       "norm_label": "spoolgrams()"
     },
     {
@@ -1239,7 +1239,7 @@
       "source_location": "L441",
       "_origin": "ast",
       "id": "go_services_cmd_poller_bambu_spoolcolorsandtypes",
-      "community": 92,
+      "community": 37,
       "norm_label": "spoolcolorsandtypes()"
     },
     {
@@ -1259,7 +1259,7 @@
       "source_location": "L476",
       "_origin": "ast",
       "id": "go_services_cmd_poller_bambu_updatebambufilamentused",
-      "community": 92,
+      "community": 37,
       "norm_label": "updatebambufilamentused()"
     },
     {
@@ -1999,7 +1999,7 @@
       "source_location": "L191",
       "_origin": "ast",
       "id": "home_saral_3d_farmlab_claude_worktrees_beautiful_liskov_68203d_go_services_cmd_poller_filament_consumption_applyfilamentconsumption",
-      "community": 92,
+      "community": 37,
       "norm_label": "applyfilamentconsumption()"
     },
     {
@@ -2369,7 +2369,7 @@
       "source_location": "L31",
       "_origin": "ast",
       "id": "go_services_cmd_poller_helpers_mstr",
-      "community": 92,
+      "community": 43,
       "norm_label": "mstr()"
     },
     {
@@ -2459,7 +2459,7 @@
       "source_location": "L101",
       "_origin": "ast",
       "id": "go_services_cmd_poller_helpers_asslice",
-      "community": 92,
+      "community": 37,
       "norm_label": "asslice()"
     },
     {
@@ -2479,7 +2479,7 @@
       "source_location": "L116",
       "_origin": "ast",
       "id": "go_services_cmd_poller_helpers_round1",
-      "community": 92,
+      "community": 37,
       "norm_label": "round1()"
     },
     {
@@ -2669,7 +2669,7 @@
       "source_location": "L28",
       "_origin": "ast",
       "id": "go_services_cmd_poller_netbytes_addbytesin",
-      "community": 33,
+      "community": 92,
       "norm_label": "addbytesin()"
     },
     {
@@ -3269,7 +3269,7 @@
       "source_location": "L22",
       "_origin": "ast",
       "id": "go_services_cmd_poller_snapmaker_buildcurrentjob",
-      "community": 92,
+      "community": 21,
       "norm_label": "buildcurrentjob()"
     },
     {
@@ -3339,7 +3339,7 @@
       "source_location": "L278",
       "_origin": "ast",
       "id": "go_services_cmd_poller_snapmaker_maxf",
-      "community": 92,
+      "community": 21,
       "norm_label": "maxf()"
     },
     {
@@ -3959,7 +3959,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "go_services_cmd_poller_util",
-      "community": 41,
+      "community": 92,
       "norm_label": "util.go"
     },
     {
@@ -3979,7 +3979,7 @@
       "source_location": "L22",
       "_origin": "ast",
       "id": "go_services_cmd_poller_util_addrport",
-      "community": 41,
+      "community": 92,
       "norm_label": "addrport()"
     },
     {
@@ -8399,7 +8399,7 @@
       "source_location": "L17",
       "_origin": "ast",
       "id": "web_sessionrow",
-      "community": 16,
+      "community": 44,
       "norm_label": "sessionrow"
     },
     {
@@ -8439,7 +8439,7 @@
       "source_location": "L35",
       "_origin": "ast",
       "id": "go_services_cmd_web_sessionstore_getsession",
-      "community": 117,
+      "community": 44,
       "norm_label": "getsession()"
     },
     {
@@ -20731,7 +20731,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "src_app_components_filamentspoolicon",
-      "community": 14,
+      "community": 13,
       "norm_label": "filamentspoolicon.tsx"
     },
     {
@@ -20741,7 +20741,7 @@
       "source_location": "L7",
       "_origin": "ast",
       "id": "src_app_components_filamentspoolicon_filamentspoolicon",
-      "community": 14,
+      "community": 13,
       "norm_label": "filamentspoolicon()"
     },
     {
@@ -20751,7 +20751,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "src_app_components_homeassistantsettings",
-      "community": 6,
+      "community": 14,
       "norm_label": "homeassistantsettings.tsx"
     },
     {
@@ -20761,7 +20761,7 @@
       "source_location": "L35",
       "_origin": "ast",
       "id": "src_app_components_homeassistantsettings_homeassistantsettingsprops",
-      "community": 6,
+      "community": 14,
       "norm_label": "homeassistantsettingsprops"
     },
     {
@@ -20771,7 +20771,7 @@
       "source_location": "L39",
       "_origin": "ast",
       "id": "src_app_components_homeassistantsettings_common_services",
-      "community": 6,
+      "community": 14,
       "norm_label": "common_services"
     },
     {
@@ -20781,7 +20781,7 @@
       "source_location": "L53",
       "_origin": "ast",
       "id": "src_app_components_homeassistantsettings_hidden_card_domains",
-      "community": 6,
+      "community": 14,
       "norm_label": "hidden_card_domains"
     },
     {
@@ -20791,7 +20791,7 @@
       "source_location": "L66",
       "_origin": "ast",
       "id": "src_app_components_homeassistantsettings_printer_statuses",
-      "community": 6,
+      "community": 14,
       "norm_label": "printer_statuses"
     },
     {
@@ -20801,7 +20801,7 @@
       "source_location": "L67",
       "_origin": "ast",
       "id": "src_app_components_homeassistantsettings_printer_commands",
-      "community": 6,
+      "community": 14,
       "norm_label": "printer_commands"
     },
     {
@@ -20811,7 +20811,7 @@
       "source_location": "L70",
       "_origin": "ast",
       "id": "src_app_components_homeassistantsettings_entityselect",
-      "community": 6,
+      "community": 14,
       "norm_label": "entityselect()"
     },
     {
@@ -20821,7 +20821,7 @@
       "source_location": "L106",
       "_origin": "ast",
       "id": "src_app_components_homeassistantsettings_section",
-      "community": 6,
+      "community": 14,
       "norm_label": "section()"
     },
     {
@@ -20831,7 +20831,7 @@
       "source_location": "L157",
       "_origin": "ast",
       "id": "src_app_components_homeassistantsettings_homeassistantsettings",
-      "community": 6,
+      "community": 14,
       "norm_label": "homeassistantsettings()"
     },
     {
@@ -20871,7 +20871,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "src_app_components_maintenanceintervalssettings",
-      "community": 6,
+      "community": 29,
       "norm_label": "maintenanceintervalssettings.tsx"
     },
     {
@@ -20891,7 +20891,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "src_app_components_maintenancenotifier",
-      "community": 29,
+      "community": 58,
       "norm_label": "maintenancenotifier.tsx"
     },
     {
@@ -20901,7 +20901,7 @@
       "source_location": "L27",
       "_origin": "ast",
       "id": "src_app_components_maintenancenotifier_level_by_kind",
-      "community": 29,
+      "community": 58,
       "norm_label": "level_by_kind"
     },
     {
@@ -20911,7 +20911,7 @@
       "source_location": "L33",
       "_origin": "ast",
       "id": "src_app_components_maintenancenotifier_maintenancenotifier",
-      "community": 63,
+      "community": 58,
       "norm_label": "maintenancenotifier()"
     },
     {
@@ -21101,7 +21101,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "src_app_components_oauthprovidersettings",
-      "community": 6,
+      "community": 4,
       "norm_label": "oauthprovidersettings.tsx"
     },
     {
@@ -21111,7 +21111,7 @@
       "source_location": "L15",
       "_origin": "ast",
       "id": "src_app_components_oauthprovidersettings_oauthprovidersettingsprops",
-      "community": 26,
+      "community": 4,
       "norm_label": "oauthprovidersettingsprops"
     },
     {
@@ -21301,7 +21301,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "src_app_components_printerstatusnotifier",
-      "community": 55,
+      "community": 58,
       "norm_label": "printerstatusnotifier.tsx"
     },
     {
@@ -21311,7 +21311,7 @@
       "source_location": "L8",
       "_origin": "ast",
       "id": "src_app_components_printerstatusnotifier_printersnapshot",
-      "community": 55,
+      "community": 58,
       "norm_label": "printersnapshot"
     },
     {
@@ -21321,7 +21321,7 @@
       "source_location": "L17",
       "_origin": "ast",
       "id": "src_app_components_printerstatusnotifier_transitionresult",
-      "community": 55,
+      "community": 58,
       "norm_label": "transitionresult"
     },
     {
@@ -21331,7 +21331,7 @@
       "source_location": "L21",
       "_origin": "ast",
       "id": "src_app_components_printerstatusnotifier_emitevent",
-      "community": 55,
+      "community": 58,
       "norm_label": "emitevent"
     },
     {
@@ -21341,7 +21341,7 @@
       "source_location": "L29",
       "_origin": "ast",
       "id": "src_app_components_printerstatusnotifier_getjobname",
-      "community": 55,
+      "community": 58,
       "norm_label": "getjobname()"
     },
     {
@@ -21351,7 +21351,7 @@
       "source_location": "L33",
       "_origin": "ast",
       "id": "src_app_components_printerstatusnotifier_notifyprintertransition",
-      "community": 55,
+      "community": 58,
       "norm_label": "notifyprintertransition()"
     },
     {
@@ -21361,7 +21361,7 @@
       "source_location": "L90",
       "_origin": "ast",
       "id": "src_app_components_printerstatusnotifier_toprintermap",
-      "community": 55,
+      "community": 58,
       "norm_label": "toprintermap()"
     },
     {
@@ -21371,7 +21371,7 @@
       "source_location": "L105",
       "_origin": "ast",
       "id": "src_app_components_printerstatusnotifier_printerstatusnotifier",
-      "community": 55,
+      "community": 58,
       "norm_label": "printerstatusnotifier()"
     },
     {
@@ -21381,7 +21381,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "src_app_components_protectedroute",
-      "community": 63,
+      "community": 55,
       "norm_label": "protectedroute.tsx"
     },
     {
@@ -21391,7 +21391,7 @@
       "source_location": "L6",
       "_origin": "ast",
       "id": "src_app_components_protectedroute_protectedroute",
-      "community": 63,
+      "community": 55,
       "norm_label": "protectedroute()"
     },
     {
@@ -21401,7 +21401,7 @@
       "source_location": "L31",
       "_origin": "ast",
       "id": "src_app_components_protectedroute_adminroute",
-      "community": 63,
+      "community": 55,
       "norm_label": "adminroute()"
     },
     {
@@ -21411,7 +21411,7 @@
       "source_location": "L63",
       "_origin": "ast",
       "id": "src_app_components_protectedroute_staffroute",
-      "community": 63,
+      "community": 55,
       "norm_label": "staffroute()"
     },
     {
@@ -21421,7 +21421,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "src_app_components_queueavailabilitydialog",
-      "community": 6,
+      "community": 4,
       "norm_label": "queueavailabilitydialog.tsx"
     },
     {
@@ -21431,7 +21431,7 @@
       "source_location": "L23",
       "_origin": "ast",
       "id": "src_app_components_queueavailabilitydialog_day_labels",
-      "community": 6,
+      "community": 4,
       "norm_label": "day_labels"
     },
     {
@@ -21441,7 +21441,7 @@
       "source_location": "L33",
       "_origin": "ast",
       "id": "src_app_components_queueavailabilitydialog_default_settings",
-      "community": 6,
+      "community": 4,
       "norm_label": "default_settings"
     },
     {
@@ -21451,7 +21451,7 @@
       "source_location": "L42",
       "_origin": "ast",
       "id": "src_app_components_queueavailabilitydialog_queueavailabilitydialogprops",
-      "community": 6,
+      "community": 4,
       "norm_label": "queueavailabilitydialogprops"
     },
     {
@@ -21461,7 +21461,7 @@
       "source_location": "L49",
       "_origin": "ast",
       "id": "src_app_components_queueavailabilitydialog_queueavailabilitydialog",
-      "community": 63,
+      "community": 55,
       "norm_label": "queueavailabilitydialog()"
     },
     {
@@ -21591,7 +21591,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "src_app_components_samlssosettings",
-      "community": 6,
+      "community": 4,
       "norm_label": "samlssosettings.tsx"
     },
     {
@@ -21601,7 +21601,7 @@
       "source_location": "L27",
       "_origin": "ast",
       "id": "src_app_components_samlssosettings_samlssosettingsprops",
-      "community": 6,
+      "community": 4,
       "norm_label": "samlssosettingsprops"
     },
     {
@@ -21611,7 +21611,7 @@
       "source_location": "L34",
       "_origin": "ast",
       "id": "src_app_components_samlssosettings_ishttpurl",
-      "community": 6,
+      "community": 4,
       "norm_label": "ishttpurl()"
     },
     {
@@ -21621,7 +21621,7 @@
       "source_location": "L46",
       "_origin": "ast",
       "id": "src_app_components_samlssosettings_lookslikecertificate",
-      "community": 6,
+      "community": 4,
       "norm_label": "lookslikecertificate()"
     },
     {
@@ -21851,7 +21851,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "src_app_components_statuslightsettings",
-      "community": 6,
+      "community": 4,
       "norm_label": "statuslightsettings.tsx"
     },
     {
@@ -21861,7 +21861,7 @@
       "source_location": "L25",
       "_origin": "ast",
       "id": "src_app_components_statuslightsettings_color_legend",
-      "community": 6,
+      "community": 4,
       "norm_label": "color_legend"
     },
     {
@@ -21871,7 +21871,7 @@
       "source_location": "L36",
       "_origin": "ast",
       "id": "src_app_components_statuslightsettings_statuslightsettings",
-      "community": 6,
+      "community": 55,
       "norm_label": "statuslightsettings()"
     },
     {
@@ -22331,7 +22331,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "src_app_components_ui_button",
-      "community": 6,
+      "community": 63,
       "norm_label": "button.tsx"
     },
     {
@@ -22351,7 +22351,7 @@
       "source_location": "L37",
       "_origin": "ast",
       "id": "src_app_components_ui_button_button",
-      "community": 6,
+      "community": 63,
       "norm_label": "button()"
     },
     {
@@ -22361,7 +22361,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "src_app_components_ui_card",
-      "community": 6,
+      "community": 4,
       "norm_label": "card.tsx"
     },
     {
@@ -22371,7 +22371,7 @@
       "source_location": "L5",
       "_origin": "ast",
       "id": "src_app_components_ui_card_card",
-      "community": 6,
+      "community": 4,
       "norm_label": "card()"
     },
     {
@@ -22551,7 +22551,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "src_app_components_ui_checkbox",
-      "community": 6,
+      "community": 26,
       "norm_label": "checkbox.tsx"
     },
     {
@@ -22561,7 +22561,7 @@
       "source_location": "L9",
       "_origin": "ast",
       "id": "src_app_components_ui_checkbox_checkbox",
-      "community": 6,
+      "community": 26,
       "norm_label": "checkbox()"
     },
     {
@@ -23201,7 +23201,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "src_app_components_ui_input",
-      "community": 6,
+      "community": 4,
       "norm_label": "input.tsx"
     },
     {
@@ -23211,7 +23211,7 @@
       "source_location": "L5",
       "_origin": "ast",
       "id": "src_app_components_ui_input_input",
-      "community": 6,
+      "community": 4,
       "norm_label": "input()"
     },
     {
@@ -23221,7 +23221,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "src_app_components_ui_label",
-      "community": 6,
+      "community": 4,
       "norm_label": "label.tsx"
     },
     {
@@ -23231,7 +23231,7 @@
       "source_location": "L8",
       "_origin": "ast",
       "id": "src_app_components_ui_label_label",
-      "community": 6,
+      "community": 4,
       "norm_label": "label()"
     },
     {
@@ -23651,7 +23651,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "src_app_components_ui_progress",
-      "community": 55,
+      "community": 4,
       "norm_label": "progress.tsx"
     },
     {
@@ -23661,7 +23661,7 @@
       "source_location": "L8",
       "_origin": "ast",
       "id": "src_app_components_ui_progress_progress",
-      "community": 55,
+      "community": 4,
       "norm_label": "progress()"
     },
     {
@@ -23731,7 +23731,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "src_app_components_ui_select",
-      "community": 6,
+      "community": 4,
       "norm_label": "select.tsx"
     },
     {
@@ -23741,7 +23741,7 @@
       "source_location": "L13",
       "_origin": "ast",
       "id": "src_app_components_ui_select_select",
-      "community": 6,
+      "community": 4,
       "norm_label": "select()"
     },
     {
@@ -23751,7 +23751,7 @@
       "source_location": "L19",
       "_origin": "ast",
       "id": "src_app_components_ui_select_selectgroup",
-      "community": 6,
+      "community": 4,
       "norm_label": "selectgroup()"
     },
     {
@@ -23761,7 +23761,7 @@
       "source_location": "L25",
       "_origin": "ast",
       "id": "src_app_components_ui_select_selectvalue",
-      "community": 6,
+      "community": 4,
       "norm_label": "selectvalue()"
     },
     {
@@ -23771,7 +23771,7 @@
       "source_location": "L31",
       "_origin": "ast",
       "id": "src_app_components_ui_select_selecttrigger",
-      "community": 6,
+      "community": 4,
       "norm_label": "selecttrigger()"
     },
     {
@@ -23781,7 +23781,7 @@
       "source_location": "L57",
       "_origin": "ast",
       "id": "src_app_components_ui_select_selectcontent",
-      "community": 6,
+      "community": 4,
       "norm_label": "selectcontent()"
     },
     {
@@ -23791,7 +23791,7 @@
       "source_location": "L92",
       "_origin": "ast",
       "id": "src_app_components_ui_select_selectlabel",
-      "community": 6,
+      "community": 4,
       "norm_label": "selectlabel()"
     },
     {
@@ -23801,7 +23801,7 @@
       "source_location": "L105",
       "_origin": "ast",
       "id": "src_app_components_ui_select_selectitem",
-      "community": 6,
+      "community": 4,
       "norm_label": "selectitem()"
     },
     {
@@ -24291,7 +24291,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "src_app_components_ui_sonner",
-      "community": 6,
+      "community": 4,
       "norm_label": "sonner.tsx"
     },
     {
@@ -24311,7 +24311,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "src_app_components_ui_switch",
-      "community": 6,
+      "community": 4,
       "norm_label": "switch.tsx"
     },
     {
@@ -24321,7 +24321,7 @@
       "source_location": "L8",
       "_origin": "ast",
       "id": "src_app_components_ui_switch_switch",
-      "community": 6,
+      "community": 4,
       "norm_label": "switch()"
     },
     {
@@ -24421,7 +24421,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "src_app_components_ui_tabs",
-      "community": 14,
+      "community": 6,
       "norm_label": "tabs.tsx"
     },
     {
@@ -24431,7 +24431,7 @@
       "source_location": "L8",
       "_origin": "ast",
       "id": "src_app_components_ui_tabs_tabs",
-      "community": 14,
+      "community": 6,
       "norm_label": "tabs()"
     },
     {
@@ -24441,7 +24441,7 @@
       "source_location": "L21",
       "_origin": "ast",
       "id": "src_app_components_ui_tabs_tabslist",
-      "community": 14,
+      "community": 6,
       "norm_label": "tabslist()"
     },
     {
@@ -24451,7 +24451,7 @@
       "source_location": "L37",
       "_origin": "ast",
       "id": "src_app_components_ui_tabs_tabstrigger",
-      "community": 14,
+      "community": 6,
       "norm_label": "tabstrigger()"
     },
     {
@@ -24461,7 +24461,7 @@
       "source_location": "L53",
       "_origin": "ast",
       "id": "src_app_components_ui_tabs_tabscontent",
-      "community": 14,
+      "community": 6,
       "norm_label": "tabscontent()"
     },
     {
@@ -24471,7 +24471,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "src_app_components_ui_textarea",
-      "community": 6,
+      "community": 4,
       "norm_label": "textarea.tsx"
     },
     {
@@ -24481,7 +24481,7 @@
       "source_location": "L5",
       "_origin": "ast",
       "id": "src_app_components_ui_textarea_textarea",
-      "community": 6,
+      "community": 4,
       "norm_label": "textarea()"
     },
     {
@@ -24631,7 +24631,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "src_app_components_ui_utils",
-      "community": 6,
+      "community": 4,
       "norm_label": "utils.ts"
     },
     {
@@ -24891,7 +24891,7 @@
       "source_location": "L760",
       "_origin": "ast",
       "id": "src_app_contexts_authcontext_useauth",
-      "community": 63,
+      "community": 55,
       "norm_label": "useauth()"
     },
     {
@@ -25021,7 +25021,7 @@
       "source_location": "L33",
       "_origin": "ast",
       "id": "src_app_contexts_printerscontext_printersprovider",
-      "community": 63,
+      "community": 55,
       "norm_label": "printersprovider()"
     },
     {
@@ -25041,7 +25041,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "src_app_contexts_sidebarcontext",
-      "community": 63,
+      "community": 55,
       "norm_label": "sidebarcontext.tsx"
     },
     {
@@ -25051,7 +25051,7 @@
       "source_location": "L10",
       "_origin": "ast",
       "id": "src_app_contexts_sidebarcontext_sidebarcontexttype",
-      "community": 63,
+      "community": 55,
       "norm_label": "sidebarcontexttype"
     },
     {
@@ -25061,7 +25061,7 @@
       "source_location": "L17",
       "_origin": "ast",
       "id": "src_app_contexts_sidebarcontext_sidebarcontext",
-      "community": 63,
+      "community": 55,
       "norm_label": "sidebarcontext"
     },
     {
@@ -25071,7 +25071,7 @@
       "source_location": "L43",
       "_origin": "ast",
       "id": "src_app_contexts_sidebarcontext_queuemaintenancealerts",
-      "community": 29,
+      "community": 58,
       "norm_label": "queuemaintenancealerts()"
     },
     {
@@ -25081,7 +25081,7 @@
       "source_location": "L102",
       "_origin": "ast",
       "id": "src_app_contexts_sidebarcontext_isprivilegedstaff",
-      "community": 63,
+      "community": 55,
       "norm_label": "isprivilegedstaff()"
     },
     {
@@ -25091,7 +25091,7 @@
       "source_location": "L106",
       "_origin": "ast",
       "id": "src_app_contexts_sidebarcontext_sidebarprovider",
-      "community": 63,
+      "community": 55,
       "norm_label": "sidebarprovider()"
     },
     {
@@ -25351,7 +25351,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "src_app_lib_auditapi",
-      "community": 63,
+      "community": 76,
       "norm_label": "auditapi.ts"
     },
     {
@@ -25361,7 +25361,7 @@
       "source_location": "L7",
       "_origin": "ast",
       "id": "src_app_lib_auditapi_auditactor",
-      "community": 63,
+      "community": 76,
       "norm_label": "auditactor"
     },
     {
@@ -25371,7 +25371,7 @@
       "source_location": "L13",
       "_origin": "ast",
       "id": "src_app_lib_auditapi_auditlogentry",
-      "community": 63,
+      "community": 76,
       "norm_label": "auditlogentry"
     },
     {
@@ -25381,7 +25381,7 @@
       "source_location": "L28",
       "_origin": "ast",
       "id": "src_app_lib_auditapi_currentactor",
-      "community": 63,
+      "community": 76,
       "norm_label": "currentactor"
     },
     {
@@ -25391,7 +25391,7 @@
       "source_location": "L30",
       "_origin": "ast",
       "id": "src_app_lib_auditapi_setauditactor",
-      "community": 63,
+      "community": 76,
       "norm_label": "setauditactor()"
     },
     {
@@ -25411,7 +25411,7 @@
       "source_location": "L59",
       "_origin": "ast",
       "id": "src_app_lib_auditapi_fetchauditlogs",
-      "community": 63,
+      "community": 76,
       "norm_label": "fetchauditlogs()"
     },
     {
@@ -25421,7 +25421,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "src_app_lib_authsessionapi",
-      "community": 196,
+      "community": 26,
       "norm_label": "authsessionapi.ts"
     },
     {
@@ -25431,7 +25431,7 @@
       "source_location": "L7",
       "_origin": "ast",
       "id": "src_app_lib_authsessionapi_sessionrole",
-      "community": 196,
+      "community": 26,
       "norm_label": "sessionrole"
     },
     {
@@ -25441,7 +25441,7 @@
       "source_location": "L9",
       "_origin": "ast",
       "id": "src_app_lib_authsessionapi_sessionuser",
-      "community": 196,
+      "community": 26,
       "norm_label": "sessionuser"
     },
     {
@@ -25451,7 +25451,7 @@
       "source_location": "L16",
       "_origin": "ast",
       "id": "src_app_lib_authsessionapi_loginsessionresult",
-      "community": 196,
+      "community": 26,
       "norm_label": "loginsessionresult"
     },
     {
@@ -25461,7 +25461,7 @@
       "source_location": "L24",
       "_origin": "ast",
       "id": "src_app_lib_authsessionapi_readerror",
-      "community": 196,
+      "community": 26,
       "norm_label": "readerror()"
     },
     {
@@ -25471,7 +25471,7 @@
       "source_location": "L36",
       "_origin": "ast",
       "id": "src_app_lib_authsessionapi_loginsession",
-      "community": 196,
+      "community": 26,
       "norm_label": "loginsession()"
     },
     {
@@ -25481,7 +25481,7 @@
       "source_location": "L66",
       "_origin": "ast",
       "id": "src_app_lib_authsessionapi_logoutsession",
-      "community": 196,
+      "community": 26,
       "norm_label": "logoutsession()"
     },
     {
@@ -25491,7 +25491,7 @@
       "source_location": "L80",
       "_origin": "ast",
       "id": "src_app_lib_authsessionapi_fetchsession",
-      "community": 196,
+      "community": 26,
       "norm_label": "fetchsession()"
     },
     {
@@ -25731,7 +25731,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "src_app_lib_eventstream",
-      "community": 29,
+      "community": 58,
       "norm_label": "eventstream.ts"
     },
     {
@@ -25741,7 +25741,7 @@
       "source_location": "L14",
       "_origin": "ast",
       "id": "src_app_lib_eventstream_acquireeventstream",
-      "community": 29,
+      "community": 58,
       "norm_label": "acquireeventstream()"
     },
     {
@@ -25751,7 +25751,7 @@
       "source_location": "L22",
       "_origin": "ast",
       "id": "src_app_lib_eventstream_releaseeventstream",
-      "community": 29,
+      "community": 58,
       "norm_label": "releaseeventstream()"
     },
     {
@@ -25961,7 +25961,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "src_app_lib_homeassistantapi",
-      "community": 30,
+      "community": 14,
       "norm_label": "homeassistantapi.ts"
     },
     {
@@ -25971,7 +25971,7 @@
       "source_location": "L3",
       "_origin": "ast",
       "id": "src_app_lib_homeassistantapi_homeassistantconfig",
-      "community": 30,
+      "community": 14,
       "norm_label": "homeassistantconfig"
     },
     {
@@ -25981,7 +25981,7 @@
       "source_location": "L12",
       "_origin": "ast",
       "id": "src_app_lib_homeassistantapi_homeassistantconfiginput",
-      "community": 30,
+      "community": 14,
       "norm_label": "homeassistantconfiginput"
     },
     {
@@ -25991,7 +25991,7 @@
       "source_location": "L18",
       "_origin": "ast",
       "id": "src_app_lib_homeassistantapi_haentity",
-      "community": 30,
+      "community": 14,
       "norm_label": "haentity"
     },
     {
@@ -26001,7 +26001,7 @@
       "source_location": "L25",
       "_origin": "ast",
       "id": "src_app_lib_homeassistantapi_hadevices",
-      "community": 30,
+      "community": 14,
       "norm_label": "hadevices"
     },
     {
@@ -26011,7 +26011,7 @@
       "source_location": "L30",
       "_origin": "ast",
       "id": "src_app_lib_homeassistantapi_haruledirection",
-      "community": 30,
+      "community": 14,
       "norm_label": "haruledirection"
     },
     {
@@ -26021,7 +26021,7 @@
       "source_location": "L34",
       "_origin": "ast",
       "id": "src_app_lib_homeassistantapi_harule",
-      "community": 30,
+      "community": 14,
       "norm_label": "harule"
     },
     {
@@ -26031,7 +26031,7 @@
       "source_location": "L53",
       "_origin": "ast",
       "id": "src_app_lib_homeassistantapi_haruleinput",
-      "community": 30,
+      "community": 14,
       "norm_label": "haruleinput"
     },
     {
@@ -26041,7 +26041,7 @@
       "source_location": "L69",
       "_origin": "ast",
       "id": "src_app_lib_homeassistantapi_parseerror",
-      "community": 30,
+      "community": 14,
       "norm_label": "parseerror()"
     },
     {
@@ -26051,7 +26051,7 @@
       "source_location": "L78",
       "_origin": "ast",
       "id": "src_app_lib_homeassistantapi_fetchhomeassistantconfig",
-      "community": 30,
+      "community": 14,
       "norm_label": "fetchhomeassistantconfig()"
     },
     {
@@ -26061,7 +26061,7 @@
       "source_location": "L86",
       "_origin": "ast",
       "id": "src_app_lib_homeassistantapi_savehomeassistantconfig",
-      "community": 30,
+      "community": 14,
       "norm_label": "savehomeassistantconfig()"
     },
     {
@@ -26071,7 +26071,7 @@
       "source_location": "L101",
       "_origin": "ast",
       "id": "src_app_lib_homeassistantapi_testhomeassistantconnection",
-      "community": 30,
+      "community": 14,
       "norm_label": "testhomeassistantconnection()"
     },
     {
@@ -26081,7 +26081,7 @@
       "source_location": "L109",
       "_origin": "ast",
       "id": "src_app_lib_homeassistantapi_fetchhomeassistantdevices",
-      "community": 30,
+      "community": 14,
       "norm_label": "fetchhomeassistantdevices()"
     },
     {
@@ -26091,7 +26091,7 @@
       "source_location": "L117",
       "_origin": "ast",
       "id": "src_app_lib_homeassistantapi_fetchharules",
-      "community": 30,
+      "community": 14,
       "norm_label": "fetchharules()"
     },
     {
@@ -26101,7 +26101,7 @@
       "source_location": "L126",
       "_origin": "ast",
       "id": "src_app_lib_homeassistantapi_createharule",
-      "community": 30,
+      "community": 14,
       "norm_label": "createharule()"
     },
     {
@@ -26111,7 +26111,7 @@
       "source_location": "L139",
       "_origin": "ast",
       "id": "src_app_lib_homeassistantapi_setharuleenabled",
-      "community": 30,
+      "community": 14,
       "norm_label": "setharuleenabled()"
     },
     {
@@ -26121,7 +26121,7 @@
       "source_location": "L152",
       "_origin": "ast",
       "id": "src_app_lib_homeassistantapi_deleteharule",
-      "community": 30,
+      "community": 14,
       "norm_label": "deleteharule()"
     },
     {
@@ -26131,7 +26131,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "src_app_lib_id",
-      "community": 58,
+      "community": 6,
       "norm_label": "id.ts"
     },
     {
@@ -26141,7 +26141,7 @@
       "source_location": "L10",
       "_origin": "ast",
       "id": "src_app_lib_id_generateid",
-      "community": 58,
+      "community": 6,
       "norm_label": "generateid()"
     },
     {
@@ -26151,7 +26151,7 @@
       "source_location": "L41",
       "_origin": "ast",
       "id": "src_app_lib_id_slugifyprinterid",
-      "community": 58,
+      "community": 6,
       "norm_label": "slugifyprinterid()"
     },
     {
@@ -26221,7 +26221,7 @@
       "source_location": "L51",
       "_origin": "ast",
       "id": "src_app_lib_maintenanceapi_maintenancenotification",
-      "community": 29,
+      "community": 58,
       "norm_label": "maintenancenotification"
     },
     {
@@ -26371,7 +26371,7 @@
       "source_location": "L160",
       "_origin": "ast",
       "id": "src_app_lib_maintenanceapi_markmaintenancenotificationsread",
-      "community": 29,
+      "community": 58,
       "norm_label": "markmaintenancenotificationsread()"
     },
     {
@@ -26391,7 +26391,7 @@
       "source_location": "L172",
       "_origin": "ast",
       "id": "src_app_lib_maintenanceapi_savemaintenanceintervals",
-      "community": 14,
+      "community": 29,
       "norm_label": "savemaintenanceintervals()"
     },
     {
@@ -26401,7 +26401,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "src_app_lib_managerrequestsapi",
-      "community": 122,
+      "community": 6,
       "norm_label": "managerrequestsapi.ts"
     },
     {
@@ -26411,7 +26411,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "src_app_lib_managerrequestsapi_managerrequeststatus",
-      "community": 122,
+      "community": 6,
       "norm_label": "managerrequeststatus"
     },
     {
@@ -26421,7 +26421,7 @@
       "source_location": "L3",
       "_origin": "ast",
       "id": "src_app_lib_managerrequestsapi_managerrequest",
-      "community": 122,
+      "community": 6,
       "norm_label": "managerrequest"
     },
     {
@@ -26431,7 +26431,7 @@
       "source_location": "L13",
       "_origin": "ast",
       "id": "src_app_lib_managerrequestsapi_parseerror",
-      "community": 122,
+      "community": 6,
       "norm_label": "parseerror()"
     },
     {
@@ -26441,7 +26441,7 @@
       "source_location": "L25",
       "_origin": "ast",
       "id": "src_app_lib_managerrequestsapi_submitmanagerrequest",
-      "community": 122,
+      "community": 6,
       "norm_label": "submitmanagerrequest()"
     },
     {
@@ -26451,7 +26451,7 @@
       "source_location": "L44",
       "_origin": "ast",
       "id": "src_app_lib_managerrequestsapi_pollmanagerrequeststatus",
-      "community": 122,
+      "community": 6,
       "norm_label": "pollmanagerrequeststatus()"
     },
     {
@@ -26461,7 +26461,7 @@
       "source_location": "L56",
       "_origin": "ast",
       "id": "src_app_lib_managerrequestsapi_fetchmanagerrequests",
-      "community": 122,
+      "community": 6,
       "norm_label": "fetchmanagerrequests()"
     },
     {
@@ -26471,7 +26471,7 @@
       "source_location": "L64",
       "_origin": "ast",
       "id": "src_app_lib_managerrequestsapi_approvemanagerrequest",
-      "community": 122,
+      "community": 6,
       "norm_label": "approvemanagerrequest()"
     },
     {
@@ -26481,7 +26481,7 @@
       "source_location": "L73",
       "_origin": "ast",
       "id": "src_app_lib_managerrequestsapi_denymanagerrequest",
-      "community": 122,
+      "community": 6,
       "norm_label": "denymanagerrequest()"
     },
     {
@@ -26491,7 +26491,7 @@
       "source_location": "L82",
       "_origin": "ast",
       "id": "src_app_lib_managerrequestsapi_revokemanageraccess",
-      "community": 122,
+      "community": 6,
       "norm_label": "revokemanageraccess()"
     },
     {
@@ -26961,7 +26961,7 @@
       "source_location": "L10",
       "_origin": "ast",
       "id": "src_app_lib_oauthapi_oauthprovider",
-      "community": 26,
+      "community": 4,
       "norm_label": "oauthprovider"
     },
     {
@@ -27031,7 +27031,7 @@
       "source_location": "L90",
       "_origin": "ast",
       "id": "src_app_lib_oauthapi_fetchenabledoauthproviders",
-      "community": 6,
+      "community": 26,
       "norm_label": "fetchenabledoauthproviders()"
     },
     {
@@ -27071,7 +27071,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "src_app_lib_platform",
-      "community": 4,
+      "community": 63,
       "norm_label": "platform.ts"
     },
     {
@@ -27081,7 +27081,7 @@
       "source_location": "L12",
       "_origin": "ast",
       "id": "src_app_lib_platform_isiosdevice",
-      "community": 4,
+      "community": 63,
       "norm_label": "isiosdevice()"
     },
     {
@@ -27091,7 +27091,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "src_app_lib_printercallbackapi",
-      "community": 14,
+      "community": 6,
       "norm_label": "printercallbackapi.ts"
     },
     {
@@ -27101,7 +27101,7 @@
       "source_location": "L7",
       "_origin": "ast",
       "id": "src_app_lib_printercallbackapi_printercallbackurlsetting",
-      "community": 14,
+      "community": 6,
       "norm_label": "printercallbackurlsetting"
     },
     {
@@ -27111,7 +27111,7 @@
       "source_location": "L11",
       "_origin": "ast",
       "id": "src_app_lib_printercallbackapi_parseerror",
-      "community": 14,
+      "community": 6,
       "norm_label": "parseerror()"
     },
     {
@@ -27121,7 +27121,7 @@
       "source_location": "L20",
       "_origin": "ast",
       "id": "src_app_lib_printercallbackapi_fetchprintercallbackurl",
-      "community": 14,
+      "community": 6,
       "norm_label": "fetchprintercallbackurl()"
     },
     {
@@ -27131,7 +27131,7 @@
       "source_location": "L28",
       "_origin": "ast",
       "id": "src_app_lib_printercallbackapi_saveprintercallbackurl",
-      "community": 14,
+      "community": 6,
       "norm_label": "saveprintercallbackurl()"
     },
     {
@@ -27541,7 +27541,7 @@
       "source_location": "L913",
       "_origin": "ast",
       "id": "src_app_lib_printerprofiles_filament_materials",
-      "community": 14,
+      "community": 13,
       "norm_label": "filament_materials"
     },
     {
@@ -27561,7 +27561,7 @@
       "source_location": "L918",
       "_origin": "ast",
       "id": "src_app_lib_printerprofiles_filament_vendors",
-      "community": 14,
+      "community": 13,
       "norm_label": "filament_vendors"
     },
     {
@@ -27751,7 +27751,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "src_app_lib_printersapi",
-      "community": 55,
+      "community": 14,
       "norm_label": "printersapi.ts"
     },
     {
@@ -27761,7 +27761,7 @@
       "source_location": "L4",
       "_origin": "ast",
       "id": "src_app_lib_printersapi_readjsonresponse",
-      "community": 55,
+      "community": 14,
       "norm_label": "readjsonresponse()"
     },
     {
@@ -27771,7 +27771,7 @@
       "source_location": "L27",
       "_origin": "ast",
       "id": "src_app_lib_printersapi_fetchprinters",
-      "community": 6,
+      "community": 14,
       "norm_label": "fetchprinters()"
     },
     {
@@ -27781,7 +27781,7 @@
       "source_location": "L43",
       "_origin": "ast",
       "id": "src_app_lib_printersapi_fetchprintersifchanged",
-      "community": 55,
+      "community": 14,
       "norm_label": "fetchprintersifchanged()"
     },
     {
@@ -27791,7 +27791,7 @@
       "source_location": "L61",
       "_origin": "ast",
       "id": "src_app_lib_printersapi_fetchprinter",
-      "community": 55,
+      "community": 14,
       "norm_label": "fetchprinter()"
     },
     {
@@ -27801,7 +27801,7 @@
       "source_location": "L79",
       "_origin": "ast",
       "id": "src_app_lib_printersapi_saveprinter",
-      "community": 55,
+      "community": 14,
       "norm_label": "saveprinter()"
     },
     {
@@ -27871,7 +27871,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "src_app_lib_queueapi",
-      "community": 63,
+      "community": 55,
       "norm_label": "queueapi.ts"
     },
     {
@@ -27881,7 +27881,7 @@
       "source_location": "L4",
       "_origin": "ast",
       "id": "src_app_lib_queueapi_readjsonresponse",
-      "community": 63,
+      "community": 55,
       "norm_label": "readjsonresponse()"
     },
     {
@@ -27891,7 +27891,7 @@
       "source_location": "L27",
       "_origin": "ast",
       "id": "src_app_lib_queueapi_queueavailabilitystatus",
-      "community": 63,
+      "community": 55,
       "norm_label": "queueavailabilitystatus"
     },
     {
@@ -27901,7 +27901,7 @@
       "source_location": "L38",
       "_origin": "ast",
       "id": "src_app_lib_queueapi_fetchqueueavailability",
-      "community": 63,
+      "community": 55,
       "norm_label": "fetchqueueavailability()"
     },
     {
@@ -27911,7 +27911,7 @@
       "source_location": "L45",
       "_origin": "ast",
       "id": "src_app_lib_queueapi_bypassqueueavailability",
-      "community": 63,
+      "community": 55,
       "norm_label": "bypassqueueavailability()"
     },
     {
@@ -27921,7 +27921,7 @@
       "source_location": "L52",
       "_origin": "ast",
       "id": "src_app_lib_queueapi_fetchqueuejobs",
-      "community": 63,
+      "community": 55,
       "norm_label": "fetchqueuejobs()"
     },
     {
@@ -27931,7 +27931,7 @@
       "source_location": "L64",
       "_origin": "ast",
       "id": "src_app_lib_queueapi_printrequestpayload",
-      "community": 63,
+      "community": 55,
       "norm_label": "printrequestpayload"
     },
     {
@@ -27941,7 +27941,7 @@
       "source_location": "L77",
       "_origin": "ast",
       "id": "src_app_lib_queueapi_submitprintrequest",
-      "community": 63,
+      "community": 55,
       "norm_label": "submitprintrequest()"
     },
     {
@@ -27951,7 +27951,7 @@
       "source_location": "L98",
       "_origin": "ast",
       "id": "src_app_lib_queueapi_markqueuejobasprinted",
-      "community": 63,
+      "community": 55,
       "norm_label": "markqueuejobasprinted()"
     },
     {
@@ -27961,7 +27961,7 @@
       "source_location": "L107",
       "_origin": "ast",
       "id": "src_app_lib_queueapi_deletequeuejob",
-      "community": 63,
+      "community": 55,
       "norm_label": "deletequeuejob()"
     },
     {
@@ -27971,7 +27971,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "src_app_lib_runtimeconfig",
-      "community": 63,
+      "community": 26,
       "norm_label": "runtimeconfig.ts"
     },
     {
@@ -27981,7 +27981,7 @@
       "source_location": "L8",
       "_origin": "ast",
       "id": "src_app_lib_runtimeconfig_public_viewer_user",
-      "community": 63,
+      "community": 26,
       "norm_label": "public_viewer_user"
     },
     {
@@ -27991,7 +27991,7 @@
       "source_location": "L23",
       "_origin": "ast",
       "id": "src_app_lib_runtimeconfig_slicer_operator_user",
-      "community": 63,
+      "community": 26,
       "norm_label": "slicer_operator_user"
     },
     {
@@ -28001,7 +28001,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "src_app_lib_samlapi",
-      "community": 6,
+      "community": 4,
       "norm_label": "samlapi.ts"
     },
     {
@@ -28011,7 +28011,7 @@
       "source_location": "L8",
       "_origin": "ast",
       "id": "src_app_lib_samlapi_samlsettings",
-      "community": 6,
+      "community": 4,
       "norm_label": "samlsettings"
     },
     {
@@ -28021,7 +28021,7 @@
       "source_location": "L26",
       "_origin": "ast",
       "id": "src_app_lib_samlapi_samlsettingsinput",
-      "community": 6,
+      "community": 4,
       "norm_label": "samlsettingsinput"
     },
     {
@@ -28031,7 +28031,7 @@
       "source_location": "L37",
       "_origin": "ast",
       "id": "src_app_lib_samlapi_samltestcheck",
-      "community": 6,
+      "community": 4,
       "norm_label": "samltestcheck"
     },
     {
@@ -28041,7 +28041,7 @@
       "source_location": "L43",
       "_origin": "ast",
       "id": "src_app_lib_samlapi_samltestresult",
-      "community": 6,
+      "community": 4,
       "norm_label": "samltestresult"
     },
     {
@@ -28051,7 +28051,7 @@
       "source_location": "L52",
       "_origin": "ast",
       "id": "src_app_lib_samlapi_readerror",
-      "community": 6,
+      "community": 4,
       "norm_label": "readerror()"
     },
     {
@@ -28061,7 +28061,7 @@
       "source_location": "L61",
       "_origin": "ast",
       "id": "src_app_lib_samlapi_fetchsamlsettings",
-      "community": 6,
+      "community": 4,
       "norm_label": "fetchsamlsettings()"
     },
     {
@@ -28071,7 +28071,7 @@
       "source_location": "L69",
       "_origin": "ast",
       "id": "src_app_lib_samlapi_savesamlsettings",
-      "community": 6,
+      "community": 4,
       "norm_label": "savesamlsettings()"
     },
     {
@@ -28081,7 +28081,7 @@
       "source_location": "L82",
       "_origin": "ast",
       "id": "src_app_lib_samlapi_testsamlsettings",
-      "community": 6,
+      "community": 4,
       "norm_label": "testsamlsettings()"
     },
     {
@@ -28091,7 +28091,7 @@
       "source_location": "L97",
       "_origin": "ast",
       "id": "src_app_lib_samlapi_fetchsamlmetadata",
-      "community": 6,
+      "community": 4,
       "norm_label": "fetchsamlmetadata()"
     },
     {
@@ -28101,7 +28101,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "src_app_lib_settingsapi",
-      "community": 77,
+      "community": 63,
       "norm_label": "settingsapi.ts"
     },
     {
@@ -28111,7 +28111,7 @@
       "source_location": "L4",
       "_origin": "ast",
       "id": "src_app_lib_settingsapi_integrationsettings",
-      "community": 77,
+      "community": 63,
       "norm_label": "integrationsettings"
     },
     {
@@ -28121,7 +28121,7 @@
       "source_location": "L12",
       "_origin": "ast",
       "id": "src_app_lib_settingsapi_default_integration_settings",
-      "community": 77,
+      "community": 63,
       "norm_label": "default_integration_settings"
     },
     {
@@ -28131,7 +28131,7 @@
       "source_location": "L21",
       "_origin": "ast",
       "id": "src_app_lib_settingsapi_parseerror",
-      "community": 77,
+      "community": 63,
       "norm_label": "parseerror()"
     },
     {
@@ -28141,7 +28141,7 @@
       "source_location": "L30",
       "_origin": "ast",
       "id": "src_app_lib_settingsapi_brandingsettings",
-      "community": 77,
+      "community": 63,
       "norm_label": "brandingsettings"
     },
     {
@@ -28151,7 +28151,7 @@
       "source_location": "L47",
       "_origin": "ast",
       "id": "src_app_lib_settingsapi_default_branding_settings",
-      "community": 77,
+      "community": 63,
       "norm_label": "default_branding_settings"
     },
     {
@@ -28161,7 +28161,7 @@
       "source_location": "L58",
       "_origin": "ast",
       "id": "src_app_lib_settingsapi_brandinginput",
-      "community": 77,
+      "community": 63,
       "norm_label": "brandinginput"
     },
     {
@@ -28171,7 +28171,7 @@
       "source_location": "L66",
       "_origin": "ast",
       "id": "src_app_lib_settingsapi_fetchbrandingsettings",
-      "community": 77,
+      "community": 63,
       "norm_label": "fetchbrandingsettings()"
     },
     {
@@ -28181,7 +28181,7 @@
       "source_location": "L74",
       "_origin": "ast",
       "id": "src_app_lib_settingsapi_savebrandingsettings",
-      "community": 77,
+      "community": 63,
       "norm_label": "savebrandingsettings()"
     },
     {
@@ -28191,7 +28191,7 @@
       "source_location": "L93",
       "_origin": "ast",
       "id": "src_app_lib_settingsapi_loadbrandingcache",
-      "community": 77,
+      "community": 63,
       "norm_label": "loadbrandingcache()"
     },
     {
@@ -28201,7 +28201,7 @@
       "source_location": "L103",
       "_origin": "ast",
       "id": "src_app_lib_settingsapi_savebrandingcache",
-      "community": 77,
+      "community": 63,
       "norm_label": "savebrandingcache()"
     },
     {
@@ -28221,7 +28221,7 @@
       "source_location": "L137",
       "_origin": "ast",
       "id": "src_app_lib_settingsapi_fetchintegrationsettings",
-      "community": 77,
+      "community": 63,
       "norm_label": "fetchintegrationsettings()"
     },
     {
@@ -28231,7 +28231,7 @@
       "source_location": "L145",
       "_origin": "ast",
       "id": "src_app_lib_settingsapi_saveintegrationsettings",
-      "community": 77,
+      "community": 63,
       "norm_label": "saveintegrationsettings()"
     },
     {
@@ -28241,7 +28241,7 @@
       "source_location": "L160",
       "_origin": "ast",
       "id": "src_app_lib_settingsapi_queueavailabilitysettings",
-      "community": 77,
+      "community": 63,
       "norm_label": "queueavailabilitysettings"
     },
     {
@@ -28251,7 +28251,7 @@
       "source_location": "L169",
       "_origin": "ast",
       "id": "src_app_lib_settingsapi_fetchqueueavailabilitysettings",
-      "community": 77,
+      "community": 63,
       "norm_label": "fetchqueueavailabilitysettings()"
     },
     {
@@ -28261,7 +28261,7 @@
       "source_location": "L177",
       "_origin": "ast",
       "id": "src_app_lib_settingsapi_savequeueavailabilitysettings",
-      "community": 77,
+      "community": 63,
       "norm_label": "savequeueavailabilitysettings()"
     },
     {
@@ -28271,7 +28271,7 @@
       "source_location": "L194",
       "_origin": "ast",
       "id": "src_app_lib_settingsapi_useintegrationsettings",
-      "community": 77,
+      "community": 63,
       "norm_label": "useintegrationsettings()"
     },
     {
@@ -28391,7 +28391,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "src_app_lib_ssoapi",
-      "community": 14,
+      "community": 6,
       "norm_label": "ssoapi.ts"
     },
     {
@@ -28401,7 +28401,7 @@
       "source_location": "L7",
       "_origin": "ast",
       "id": "src_app_lib_ssoapi_ssopublicurlsetting",
-      "community": 14,
+      "community": 6,
       "norm_label": "ssopublicurlsetting"
     },
     {
@@ -28411,7 +28411,7 @@
       "source_location": "L14",
       "_origin": "ast",
       "id": "src_app_lib_ssoapi_parseerror",
-      "community": 14,
+      "community": 6,
       "norm_label": "parseerror()"
     },
     {
@@ -28421,7 +28421,7 @@
       "source_location": "L23",
       "_origin": "ast",
       "id": "src_app_lib_ssoapi_fetchssopublicurl",
-      "community": 14,
+      "community": 6,
       "norm_label": "fetchssopublicurl()"
     },
     {
@@ -28431,7 +28431,7 @@
       "source_location": "L31",
       "_origin": "ast",
       "id": "src_app_lib_ssoapi_savessopublicurl",
-      "community": 14,
+      "community": 6,
       "norm_label": "savessopublicurl()"
     },
     {
@@ -28441,7 +28441,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "src_app_lib_statuslightapi",
-      "community": 4,
+      "community": 30,
       "norm_label": "statuslightapi.ts"
     },
     {
@@ -28451,7 +28451,7 @@
       "source_location": "L5",
       "_origin": "ast",
       "id": "src_app_lib_statuslightapi_ledpolarity",
-      "community": 4,
+      "community": 30,
       "norm_label": "ledpolarity"
     },
     {
@@ -28461,7 +28461,7 @@
       "source_location": "L6",
       "_origin": "ast",
       "id": "src_app_lib_statuslightapi_mqtttransport",
-      "community": 4,
+      "community": 30,
       "norm_label": "mqtttransport"
     },
     {
@@ -28471,7 +28471,7 @@
       "source_location": "L8",
       "_origin": "ast",
       "id": "src_app_lib_statuslightapi_statuslightprovisioninginfo",
-      "community": 4,
+      "community": 30,
       "norm_label": "statuslightprovisioninginfo"
     },
     {
@@ -28481,7 +28481,7 @@
       "source_location": "L17",
       "_origin": "ast",
       "id": "src_app_lib_statuslightapi_statuslightdevice",
-      "community": 4,
+      "community": 30,
       "norm_label": "statuslightdevice"
     },
     {
@@ -28491,7 +28491,7 @@
       "source_location": "L32",
       "_origin": "ast",
       "id": "src_app_lib_statuslightapi_readjsonresponse",
-      "community": 4,
+      "community": 30,
       "norm_label": "readjsonresponse()"
     },
     {
@@ -28501,7 +28501,7 @@
       "source_location": "L49",
       "_origin": "ast",
       "id": "src_app_lib_statuslightapi_fetchstatuslightprovisioning",
-      "community": 4,
+      "community": 30,
       "norm_label": "fetchstatuslightprovisioning()"
     },
     {
@@ -28511,7 +28511,7 @@
       "source_location": "L54",
       "_origin": "ast",
       "id": "src_app_lib_statuslightapi_fetchstatuslightdevices",
-      "community": 4,
+      "community": 30,
       "norm_label": "fetchstatuslightdevices()"
     },
     {
@@ -28521,7 +28521,7 @@
       "source_location": "L62",
       "_origin": "ast",
       "id": "src_app_lib_statuslightapi_checkfirmwareavailable",
-      "community": 4,
+      "community": 30,
       "norm_label": "checkfirmwareavailable()"
     },
     {
@@ -28531,7 +28531,7 @@
       "source_location": "L71",
       "_origin": "ast",
       "id": "src_app_lib_statuslightapi_fetchfirmwarebinary",
-      "community": 4,
+      "community": 30,
       "norm_label": "fetchfirmwarebinary()"
     },
     {
@@ -28571,7 +28571,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "src_app_lib_statuslightserial",
-      "community": 4,
+      "community": 30,
       "norm_label": "statuslightserial.ts"
     },
     {
@@ -28581,7 +28581,7 @@
       "source_location": "L19",
       "_origin": "ast",
       "id": "src_app_lib_statuslightserial_serialportlike",
-      "community": 4,
+      "community": 30,
       "norm_label": "serialportlike"
     },
     {
@@ -28591,7 +28591,7 @@
       "source_location": "L20",
       "_origin": "ast",
       "id": "src_app_lib_statuslightserial_serialportlike_open",
-      "community": 4,
+      "community": 30,
       "norm_label": ".open()"
     },
     {
@@ -28601,7 +28601,7 @@
       "source_location": "L21",
       "_origin": "ast",
       "id": "src_app_lib_statuslightserial_serialportlike_close",
-      "community": 4,
+      "community": 30,
       "norm_label": ".close()"
     },
     {
@@ -28611,7 +28611,7 @@
       "source_location": "L23",
       "_origin": "ast",
       "id": "src_app_lib_statuslightserial_serialportlike_setsignals",
-      "community": 4,
+      "community": 30,
       "norm_label": ".setsignals()"
     },
     {
@@ -28621,7 +28621,7 @@
       "source_location": "L28",
       "_origin": "ast",
       "id": "src_app_lib_statuslightserial_navigatorserial",
-      "community": 4,
+      "community": 30,
       "norm_label": "navigatorserial"
     },
     {
@@ -28631,7 +28631,7 @@
       "source_location": "L32",
       "_origin": "ast",
       "id": "src_app_lib_statuslightserial_iswebserialsupported",
-      "community": 6,
+      "community": 55,
       "norm_label": "iswebserialsupported()"
     },
     {
@@ -28651,7 +28651,7 @@
       "source_location": "L45",
       "_origin": "ast",
       "id": "src_app_lib_statuslightserial_sleep",
-      "community": 4,
+      "community": 30,
       "norm_label": "sleep()"
     },
     {
@@ -28661,7 +28661,7 @@
       "source_location": "L48",
       "_origin": "ast",
       "id": "src_app_lib_statuslightserial_isportbusy",
-      "community": 4,
+      "community": 30,
       "norm_label": "isportbusy()"
     },
     {
@@ -28671,7 +28671,7 @@
       "source_location": "L53",
       "_origin": "ast",
       "id": "src_app_lib_statuslightserial_esptooltransport",
-      "community": 4,
+      "community": 30,
       "norm_label": "esptooltransport"
     },
     {
@@ -28681,7 +28681,7 @@
       "source_location": "L54",
       "_origin": "ast",
       "id": "src_app_lib_statuslightserial_esptoolloader",
-      "community": 4,
+      "community": 30,
       "norm_label": "esptoolloader"
     },
     {
@@ -28691,7 +28691,7 @@
       "source_location": "L56",
       "_origin": "ast",
       "id": "src_app_lib_statuslightserial_deviceconnection",
-      "community": 4,
+      "community": 30,
       "norm_label": "deviceconnection"
     },
     {
@@ -28701,7 +28701,7 @@
       "source_location": "L67",
       "_origin": "ast",
       "id": "src_app_lib_statuslightserial_connecttodevice",
-      "community": 4,
+      "community": 30,
       "norm_label": "connecttodevice()"
     },
     {
@@ -28711,7 +28711,7 @@
       "source_location": "L94",
       "_origin": "ast",
       "id": "src_app_lib_statuslightserial_flashprogress",
-      "community": 4,
+      "community": 30,
       "norm_label": "flashprogress"
     },
     {
@@ -28721,7 +28721,7 @@
       "source_location": "L107",
       "_origin": "ast",
       "id": "src_app_lib_statuslightserial_flashondevice",
-      "community": 4,
+      "community": 30,
       "norm_label": "flashondevice()"
     },
     {
@@ -28731,7 +28731,7 @@
       "source_location": "L154",
       "_origin": "ast",
       "id": "src_app_lib_statuslightserial_openwithretry",
-      "community": 4,
+      "community": 30,
       "norm_label": "openwithretry()"
     },
     {
@@ -28741,7 +28741,7 @@
       "source_location": "L173",
       "_origin": "ast",
       "id": "src_app_lib_statuslightserial_provisioningconfig",
-      "community": 4,
+      "community": 30,
       "norm_label": "provisioningconfig"
     },
     {
@@ -28751,7 +28751,7 @@
       "source_location": "L186",
       "_origin": "ast",
       "id": "src_app_lib_statuslightserial_provisionresult",
-      "community": 4,
+      "community": 30,
       "norm_label": "provisionresult"
     },
     {
@@ -28761,7 +28761,7 @@
       "source_location": "L192",
       "_origin": "ast",
       "id": "src_app_lib_statuslightserial_provisionoptions",
-      "community": 4,
+      "community": 30,
       "norm_label": "provisionoptions"
     },
     {
@@ -28771,7 +28771,7 @@
       "source_location": "L209",
       "_origin": "ast",
       "id": "src_app_lib_statuslightserial_provisiondevice",
-      "community": 4,
+      "community": 30,
       "norm_label": "provisiondevice()"
     },
     {
@@ -28781,7 +28781,7 @@
       "source_location": "L319",
       "_origin": "ast",
       "id": "src_app_lib_statuslightserial_serialmonitorhandle",
-      "community": 4,
+      "community": 30,
       "norm_label": "serialmonitorhandle"
     },
     {
@@ -28791,7 +28791,7 @@
       "source_location": "L321",
       "_origin": "ast",
       "id": "src_app_lib_statuslightserial_serialmonitorhandle_stop",
-      "community": 4,
+      "community": 30,
       "norm_label": ".stop()"
     },
     {
@@ -28801,7 +28801,7 @@
       "source_location": "L330",
       "_origin": "ast",
       "id": "src_app_lib_statuslightserial_startserialmonitor",
-      "community": 4,
+      "community": 30,
       "norm_label": "startserialmonitor()"
     },
     {
@@ -28871,7 +28871,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "src_app_lib_useautorefresh",
-      "community": 63,
+      "community": 55,
       "norm_label": "useautorefresh.ts"
     },
     {
@@ -28881,7 +28881,7 @@
       "source_location": "L8",
       "_origin": "ast",
       "id": "src_app_lib_useautorefresh_useautorefresh",
-      "community": 63,
+      "community": 55,
       "norm_label": "useautorefresh()"
     },
     {
@@ -28941,7 +28941,7 @@
       "source_location": "L17",
       "_origin": "ast",
       "id": "src_app_lib_usersapi_isreadonlyrole",
-      "community": 63,
+      "community": 55,
       "norm_label": "isreadonlyrole()"
     },
     {
@@ -29281,7 +29281,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "src_app_pages_filamentstation",
-      "community": 14,
+      "community": 4,
       "norm_label": "filamentstation.tsx"
     },
     {
@@ -29291,7 +29291,7 @@
       "source_location": "L45",
       "_origin": "ast",
       "id": "src_app_pages_filamentstation_spoolhex",
-      "community": 14,
+      "community": 4,
       "norm_label": "spoolhex()"
     },
     {
@@ -29301,7 +29301,7 @@
       "source_location": "L49",
       "_origin": "ast",
       "id": "src_app_pages_filamentstation_spoollabel",
-      "community": 14,
+      "community": 4,
       "norm_label": "spoollabel()"
     },
     {
@@ -29311,7 +29311,7 @@
       "source_location": "L58",
       "_origin": "ast",
       "id": "src_app_pages_filamentstation_spoolweightgauge",
-      "community": 14,
+      "community": 4,
       "norm_label": "spoolweightgauge()"
     },
     {
@@ -29321,7 +29321,7 @@
       "source_location": "L79",
       "_origin": "ast",
       "id": "src_app_pages_filamentstation_ndefreadingevent",
-      "community": 14,
+      "community": 4,
       "norm_label": "ndefreadingevent"
     },
     {
@@ -29331,7 +29331,7 @@
       "source_location": "L82",
       "_origin": "ast",
       "id": "src_app_pages_filamentstation_ndefreaderlike",
-      "community": 14,
+      "community": 4,
       "norm_label": "ndefreaderlike"
     },
     {
@@ -29341,7 +29341,7 @@
       "source_location": "L83",
       "_origin": "ast",
       "id": "src_app_pages_filamentstation_ndefreaderlike_scan",
-      "community": 14,
+      "community": 4,
       "norm_label": ".scan()"
     },
     {
@@ -29351,7 +29351,7 @@
       "source_location": "L88",
       "_origin": "ast",
       "id": "src_app_pages_filamentstation_ndefreaderlike_write",
-      "community": 14,
+      "community": 4,
       "norm_label": ".write()"
     },
     {
@@ -29361,7 +29361,7 @@
       "source_location": "L93",
       "_origin": "ast",
       "id": "src_app_pages_filamentstation_iswebnfcsupported",
-      "community": 14,
+      "community": 4,
       "norm_label": "iswebnfcsupported()"
     },
     {
@@ -29371,7 +29371,7 @@
       "source_location": "L102",
       "_origin": "ast",
       "id": "src_app_pages_filamentstation_scanpulse",
-      "community": 14,
+      "community": 4,
       "norm_label": "scanpulse()"
     },
     {
@@ -29381,7 +29381,7 @@
       "source_location": "L118",
       "_origin": "ast",
       "id": "src_app_pages_filamentstation_normalizetaguid",
-      "community": 14,
+      "community": 4,
       "norm_label": "normalizetaguid()"
     },
     {
@@ -29391,7 +29391,7 @@
       "source_location": "L128",
       "_origin": "ast",
       "id": "src_app_pages_filamentstation_nfctab",
-      "community": 14,
+      "community": 4,
       "norm_label": "nfctab()"
     },
     {
@@ -29401,7 +29401,7 @@
       "source_location": "L204",
       "_origin": "ast",
       "id": "src_app_pages_filamentstation_usespooltagwriter",
-      "community": 14,
+      "community": 4,
       "norm_label": "usespooltagwriter()"
     },
     {
@@ -29411,7 +29411,7 @@
       "source_location": "L257",
       "_origin": "ast",
       "id": "src_app_pages_filamentstation_addspooldialog",
-      "community": 14,
+      "community": 13,
       "norm_label": "addspooldialog()"
     },
     {
@@ -29421,7 +29421,7 @@
       "source_location": "L394",
       "_origin": "ast",
       "id": "src_app_pages_filamentstation_spoolcard",
-      "community": 14,
+      "community": 4,
       "norm_label": "spoolcard()"
     },
     {
@@ -29431,7 +29431,7 @@
       "source_location": "L502",
       "_origin": "ast",
       "id": "src_app_pages_filamentstation_spoolstab",
-      "community": 14,
+      "community": 4,
       "norm_label": "spoolstab()"
     },
     {
@@ -29451,7 +29451,7 @@
       "source_location": "L778",
       "_origin": "ast",
       "id": "src_app_pages_filamentstation_filamentstation",
-      "community": 63,
+      "community": 55,
       "norm_label": "filamentstation()"
     },
     {
@@ -29461,7 +29461,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "src_app_pages_login",
-      "community": 6,
+      "community": 26,
       "norm_label": "login.tsx"
     },
     {
@@ -29471,7 +29471,7 @@
       "source_location": "L18",
       "_origin": "ast",
       "id": "src_app_pages_login_oauth_error_messages",
-      "community": 6,
+      "community": 26,
       "norm_label": "oauth_error_messages"
     },
     {
@@ -29481,7 +29481,7 @@
       "source_location": "L28",
       "_origin": "ast",
       "id": "src_app_pages_login_login",
-      "community": 63,
+      "community": 55,
       "norm_label": "login()"
     },
     {
@@ -29491,7 +29491,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "src_app_pages_logs",
-      "community": 63,
+      "community": 76,
       "norm_label": "logs.tsx"
     },
     {
@@ -29501,7 +29501,7 @@
       "source_location": "L21",
       "_origin": "ast",
       "id": "src_app_pages_logs_action_labels",
-      "community": 63,
+      "community": 76,
       "norm_label": "action_labels"
     },
     {
@@ -29511,7 +29511,7 @@
       "source_location": "L47",
       "_origin": "ast",
       "id": "src_app_pages_logs_actionlabel",
-      "community": 63,
+      "community": 76,
       "norm_label": "actionlabel()"
     },
     {
@@ -29521,7 +29521,7 @@
       "source_location": "L51",
       "_origin": "ast",
       "id": "src_app_pages_logs_formattimestamp",
-      "community": 63,
+      "community": 76,
       "norm_label": "formattimestamp()"
     },
     {
@@ -29531,7 +29531,7 @@
       "source_location": "L66",
       "_origin": "ast",
       "id": "src_app_pages_logs_formatdetails",
-      "community": 63,
+      "community": 76,
       "norm_label": "formatdetails()"
     },
     {
@@ -29541,7 +29541,7 @@
       "source_location": "L76",
       "_origin": "ast",
       "id": "src_app_pages_logs_sourcefilter",
-      "community": 63,
+      "community": 76,
       "norm_label": "sourcefilter"
     },
     {
@@ -29551,7 +29551,7 @@
       "source_location": "L78",
       "_origin": "ast",
       "id": "src_app_pages_logs_logs",
-      "community": 63,
+      "community": 76,
       "norm_label": "logs()"
     },
     {
@@ -29601,7 +29601,7 @@
       "source_location": "L90",
       "_origin": "ast",
       "id": "src_app_pages_maintenance_maintenance",
-      "community": 63,
+      "community": 55,
       "norm_label": "maintenance()"
     },
     {
@@ -29681,7 +29681,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "src_app_pages_notfound",
-      "community": 6,
+      "community": 63,
       "norm_label": "notfound.tsx"
     },
     {
@@ -29691,7 +29691,7 @@
       "source_location": "L5",
       "_origin": "ast",
       "id": "src_app_pages_notfound_notfound",
-      "community": 6,
+      "community": 63,
       "norm_label": "notfound()"
     },
     {
@@ -29881,7 +29881,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "src_app_pages_queue",
-      "community": 63,
+      "community": 55,
       "norm_label": "queue.tsx"
     },
     {
@@ -29891,7 +29891,7 @@
       "source_location": "L23",
       "_origin": "ast",
       "id": "src_app_pages_queue_queue",
-      "community": 63,
+      "community": 55,
       "norm_label": "queue()"
     },
     {
@@ -29941,7 +29941,7 @@
       "source_location": "L98",
       "_origin": "ast",
       "id": "src_app_pages_settings_settings",
-      "community": 63,
+      "community": 55,
       "norm_label": "settings()"
     },
     {
@@ -30121,7 +30121,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "src_app_types_printerstatus",
-      "community": 13,
+      "community": 55,
       "norm_label": "printerstatus"
     },
     {
@@ -30191,7 +30191,7 @@
       "source_location": "L112",
       "_origin": "ast",
       "id": "src_app_types_queuedata",
-      "community": 63,
+      "community": 55,
       "norm_label": "queuedata"
     },
     {
@@ -34740,7 +34740,7 @@
       "source_location": "L5",
       "weight": 1.0,
       "source": "eslint_config",
-      "target": "home_saral_3d_farmlab_claude_worktrees_loving_volhard_695031_firmware_status_light_src_config_deviceconfig_valid",
+      "target": "go_services_cmd_web_config",
       "confidence_score": 1.0
     },
     {
@@ -61699,6 +61699,17 @@
       "confidence_score": 1.0
     },
     {
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "poller/redis_client.py",
+      "source_location": "L18",
+      "weight": 1.0,
+      "source": "poller_redis_client",
+      "target": "go_services_cmd_web_redis",
+      "confidence_score": 1.0
+    },
+    {
       "relation": "calls",
       "context": "call",
       "confidence": "INFERRED",
@@ -61795,17 +61806,6 @@
       "context": "field",
       "source": "web_ssrfsafetransport",
       "target": "roundtripper",
-      "confidence_score": 1.0
-    },
-    {
-      "relation": "imports",
-      "context": "import",
-      "confidence": "EXTRACTED",
-      "source_file": "poller/redis_client.py",
-      "source_location": "L18",
-      "weight": 1.0,
-      "source": "poller_redis_client",
-      "target": "web_ssrfsafetransport",
       "confidence_score": 1.0
     },
     {
@@ -124014,5 +124014,5 @@
       "source_file": "monitoring/README.md"
     }
   ],
-  "built_at_commit": "2590bc36eeeb4e91f2f537a4dc247b75100c2c45"
+  "built_at_commit": "9fb7491c840c30e459e31465dc25f12d62afc77e"
 }

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { PrintJob } from '../types';
-import { FileText, Check, Download, User, Mail, Trash2, Box } from 'lucide-react';
+import { FileText, Check, Download, User, Mail, Trash2, Eye } from 'lucide-react';
 import { Button } from './ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover';
 import { QueueModelViewerDialog } from './QueueModelViewerDialog';
@@ -75,7 +75,7 @@ export function QueueItem({
                     title="Preview model in 3D"
                     aria-label="Preview model in 3D"
                   >
-                    <Box className="size-4 text-teal-500" />
+                    <Eye className="size-4 text-teal-500" />
                   </Button>
                 </QueueModelViewerDialog>
               )}

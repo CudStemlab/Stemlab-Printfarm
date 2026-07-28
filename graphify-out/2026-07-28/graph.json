@@ -1029,7 +1029,7 @@
       "source_location": "L17",
       "_origin": "ast",
       "id": "poller_bambuclient",
-      "community": 68,
+      "community": 37,
       "norm_label": "bambuclient"
     },
     {
@@ -1039,7 +1039,7 @@
       "source_location": "",
       "_origin": "ast",
       "id": "go_services_cmd_poller_bambu_go_mutex",
-      "community": 68,
+      "community": 37,
       "norm_label": "mutex"
     },
     {
@@ -1059,7 +1059,7 @@
       "source_location": "",
       "_origin": "ast",
       "id": "go_services_cmd_poller_bambu_go_time",
-      "community": 68,
+      "community": 37,
       "norm_label": "time"
     },
     {
@@ -1079,7 +1079,7 @@
       "source_location": "L59",
       "_origin": "ast",
       "id": "poller_bambuclient_onconnect",
-      "community": 68,
+      "community": 37,
       "norm_label": ".onconnect()"
     },
     {
@@ -1089,7 +1089,7 @@
       "source_location": "L74",
       "_origin": "ast",
       "id": "poller_bambuclient_onmessage",
-      "community": 68,
+      "community": 33,
       "norm_label": ".onmessage()"
     },
     {
@@ -1099,7 +1099,7 @@
       "source_location": "",
       "_origin": "ast",
       "id": "message",
-      "community": 68,
+      "community": 33,
       "norm_label": "message"
     },
     {
@@ -1109,7 +1109,7 @@
       "source_location": "L94",
       "_origin": "ast",
       "id": "poller_bambuclient_requestpushall",
-      "community": 68,
+      "community": 37,
       "norm_label": ".requestpushall()"
     },
     {
@@ -1129,7 +1129,7 @@
       "source_location": "L131",
       "_origin": "ast",
       "id": "poller_bambuclient_close",
-      "community": 68,
+      "community": 37,
       "norm_label": ".close()"
     },
     {
@@ -1149,7 +1149,7 @@
       "source_location": "L164",
       "_origin": "ast",
       "id": "go_services_cmd_poller_bambu_prunebambuclients",
-      "community": 68,
+      "community": 37,
       "norm_label": "prunebambuclients()"
     },
     {
@@ -1219,7 +1219,7 @@
       "source_location": "L407",
       "_origin": "ast",
       "id": "poller_baselinestate",
-      "community": 68,
+      "community": 37,
       "norm_label": "baselinestate"
     },
     {
@@ -1229,7 +1229,7 @@
       "source_location": "L422",
       "_origin": "ast",
       "id": "go_services_cmd_poller_bambu_spoolgrams",
-      "community": 37,
+      "community": 92,
       "norm_label": "spoolgrams()"
     },
     {
@@ -1239,7 +1239,7 @@
       "source_location": "L441",
       "_origin": "ast",
       "id": "go_services_cmd_poller_bambu_spoolcolorsandtypes",
-      "community": 37,
+      "community": 92,
       "norm_label": "spoolcolorsandtypes()"
     },
     {
@@ -1249,7 +1249,7 @@
       "source_location": "L468",
       "_origin": "ast",
       "id": "go_services_cmd_poller_bambu_takebambuprintbaseline",
-      "community": 68,
+      "community": 37,
       "norm_label": "takebambuprintbaseline()"
     },
     {
@@ -1259,7 +1259,7 @@
       "source_location": "L476",
       "_origin": "ast",
       "id": "go_services_cmd_poller_bambu_updatebambufilamentused",
-      "community": 37,
+      "community": 92,
       "norm_label": "updatebambufilamentused()"
     },
     {
@@ -1999,7 +1999,7 @@
       "source_location": "L191",
       "_origin": "ast",
       "id": "home_saral_3d_farmlab_claude_worktrees_beautiful_liskov_68203d_go_services_cmd_poller_filament_consumption_applyfilamentconsumption",
-      "community": 37,
+      "community": 92,
       "norm_label": "applyfilamentconsumption()"
     },
     {
@@ -2369,7 +2369,7 @@
       "source_location": "L31",
       "_origin": "ast",
       "id": "go_services_cmd_poller_helpers_mstr",
-      "community": 43,
+      "community": 92,
       "norm_label": "mstr()"
     },
     {
@@ -2459,7 +2459,7 @@
       "source_location": "L101",
       "_origin": "ast",
       "id": "go_services_cmd_poller_helpers_asslice",
-      "community": 37,
+      "community": 92,
       "norm_label": "asslice()"
     },
     {
@@ -2479,7 +2479,7 @@
       "source_location": "L116",
       "_origin": "ast",
       "id": "go_services_cmd_poller_helpers_round1",
-      "community": 37,
+      "community": 92,
       "norm_label": "round1()"
     },
     {
@@ -2639,7 +2639,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "go_services_cmd_poller_netbytes",
-      "community": 68,
+      "community": 33,
       "norm_label": "netbytes.go"
     },
     {
@@ -2649,7 +2649,7 @@
       "source_location": "L17",
       "_origin": "ast",
       "id": "go_services_cmd_poller_netbytes_resetcyclebytes",
-      "community": 68,
+      "community": 33,
       "norm_label": "resetcyclebytes()"
     },
     {
@@ -2659,7 +2659,7 @@
       "source_location": "L22",
       "_origin": "ast",
       "id": "go_services_cmd_poller_netbytes_addbytesout",
-      "community": 68,
+      "community": 33,
       "norm_label": "addbytesout()"
     },
     {
@@ -2669,7 +2669,7 @@
       "source_location": "L28",
       "_origin": "ast",
       "id": "go_services_cmd_poller_netbytes_addbytesin",
-      "community": 68,
+      "community": 33,
       "norm_label": "addbytesin()"
     },
     {
@@ -2679,7 +2679,7 @@
       "source_location": "L34",
       "_origin": "ast",
       "id": "go_services_cmd_poller_netbytes_snapshotcyclebytes",
-      "community": 68,
+      "community": 33,
       "norm_label": "snapshotcyclebytes()"
     },
     {
@@ -2689,7 +2689,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "go_services_cmd_poller_notify",
-      "community": 43,
+      "community": 68,
       "norm_label": "notify.go"
     },
     {
@@ -2709,7 +2709,7 @@
       "source_location": "L38",
       "_origin": "ast",
       "id": "go_services_cmd_poller_notify_webhookwants",
-      "community": 43,
+      "community": 68,
       "norm_label": "webhookwants()"
     },
     {
@@ -2719,7 +2719,7 @@
       "source_location": "",
       "_origin": "ast",
       "id": "go_services_cmd_poller_notify_go_pmap",
-      "community": 43,
+      "community": 68,
       "norm_label": "pmap"
     },
     {
@@ -2729,7 +2729,7 @@
       "source_location": "L54",
       "_origin": "ast",
       "id": "go_services_cmd_poller_notify_ttscontentforembed",
-      "community": 43,
+      "community": 68,
       "norm_label": "ttscontentforembed()"
     },
     {
@@ -2739,7 +2739,7 @@
       "source_location": "L62",
       "_origin": "ast",
       "id": "go_services_cmd_poller_notify_senddiscordembed",
-      "community": 43,
+      "community": 68,
       "norm_label": "senddiscordembed()"
     },
     {
@@ -2749,7 +2749,7 @@
       "source_location": "L104",
       "_origin": "ast",
       "id": "go_services_cmd_poller_notify_postjson",
-      "community": 43,
+      "community": 68,
       "norm_label": "postjson()"
     },
     {
@@ -2759,7 +2759,7 @@
       "source_location": "L122",
       "_origin": "ast",
       "id": "go_services_cmd_poller_notify_postsnapshot",
-      "community": 43,
+      "community": 68,
       "norm_label": "postsnapshot()"
     },
     {
@@ -2769,7 +2769,7 @@
       "source_location": "L155",
       "_origin": "ast",
       "id": "go_services_cmd_poller_notify_fileheader",
-      "community": 43,
+      "community": 68,
       "norm_label": "fileheader()"
     },
     {
@@ -2779,7 +2779,7 @@
       "source_location": "L166",
       "_origin": "ast",
       "id": "go_services_cmd_poller_notify_grabmjpegframe",
-      "community": 43,
+      "community": 68,
       "norm_label": "grabmjpegframe()"
     },
     {
@@ -2789,7 +2789,7 @@
       "source_location": "L211",
       "_origin": "ast",
       "id": "go_services_cmd_poller_notify_fetchbambusnapshot",
-      "community": 43,
+      "community": 68,
       "norm_label": "fetchbambusnapshot()"
     },
     {
@@ -2799,7 +2799,7 @@
       "source_location": "L236",
       "_origin": "ast",
       "id": "go_services_cmd_poller_notify_fetchprintersnapshot",
-      "community": 43,
+      "community": 68,
       "norm_label": "fetchprintersnapshot()"
     },
     {
@@ -3269,7 +3269,7 @@
       "source_location": "L22",
       "_origin": "ast",
       "id": "go_services_cmd_poller_snapmaker_buildcurrentjob",
-      "community": 21,
+      "community": 92,
       "norm_label": "buildcurrentjob()"
     },
     {
@@ -3339,7 +3339,7 @@
       "source_location": "L278",
       "_origin": "ast",
       "id": "go_services_cmd_poller_snapmaker_maxf",
-      "community": 21,
+      "community": 92,
       "norm_label": "maxf()"
     },
     {
@@ -3489,7 +3489,7 @@
       "source_location": "L384",
       "_origin": "ast",
       "id": "poller_estimatekey",
-      "community": 92,
+      "community": 18,
       "norm_label": "estimatekey"
     },
     {
@@ -21488,7 +21488,7 @@
       "label": "QueueItem()",
       "file_type": "code",
       "source_file": "src/app/components/QueueItem.tsx",
-      "source_location": "L22",
+      "source_location": "L21",
       "_origin": "ast",
       "id": "src_app_components_queueitem_queueitem",
       "community": 58,
@@ -34740,7 +34740,7 @@
       "source_location": "L5",
       "weight": 1.0,
       "source": "eslint_config",
-      "target": "home_saral_3d_farmlab_claude_worktrees_loving_volhard_695031_firmware_status_light_src_config_configclear",
+      "target": "home_saral_3d_farmlab_claude_worktrees_loving_volhard_695031_firmware_status_light_src_config_deviceconfig_valid",
       "confidence_score": 1.0
     },
     {
@@ -61798,6 +61798,17 @@
       "confidence_score": 1.0
     },
     {
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "poller/redis_client.py",
+      "source_location": "L18",
+      "weight": 1.0,
+      "source": "poller_redis_client",
+      "target": "web_ssrfsafetransport",
+      "confidence_score": 1.0
+    },
+    {
       "relation": "method",
       "confidence": "EXTRACTED",
       "source_file": "go-services/cmd/web/redis.go",
@@ -61847,17 +61858,6 @@
       "source_location": "L152",
       "weight": 1.0,
       "source": "web_ssrfblockederror",
-      "target": "web_ssrfblockederror_error",
-      "confidence_score": 1.0
-    },
-    {
-      "relation": "imports",
-      "context": "import",
-      "confidence": "EXTRACTED",
-      "source_file": "poller/redis_client.py",
-      "source_location": "L18",
-      "weight": 1.0,
-      "source": "poller_redis_client",
       "target": "web_ssrfblockederror_error",
       "confidence_score": 1.0
     },
@@ -98972,7 +98972,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "src/app/components/QueueItem.tsx",
-      "source_location": "L22",
+      "source_location": "L21",
       "weight": 1.0,
       "source": "src_app_components_queueitem",
       "target": "src_app_components_queueitem_queueitem",
@@ -99148,7 +99148,7 @@
       "confidence": "EXTRACTED",
       "confidence_score": 1.0,
       "source_file": "src/app/components/QueueItem.tsx",
-      "source_location": "L41",
+      "source_location": "L39",
       "weight": 1.0,
       "source": "src_app_components_queueitem_queueitem",
       "target": "src_app_lib_modelformats_detectmodelformat"
@@ -99159,7 +99159,7 @@
       "confidence": "INFERRED",
       "confidence_score": 0.8,
       "source_file": "src/app/components/QueueItem.tsx",
-      "source_location": "L218",
+      "source_location": "L203",
       "weight": 1.0,
       "source": "src_app_components_queueitem_queueitem",
       "target": "src_app_pages_maintenance_formatdate"
@@ -119071,7 +119071,7 @@
       "confidence": "EXTRACTED",
       "confidence_score": 1.0,
       "source_file": "src/app/pages/Queue.tsx",
-      "source_location": "L214",
+      "source_location": "L189",
       "weight": 1.0,
       "source": "src_app_pages_queue_queue",
       "target": "src_app_lib_usersapi_isreadonlyrole"
@@ -124014,5 +124014,5 @@
       "source_file": "monitoring/README.md"
     }
   ],
-  "built_at_commit": "67ed2bebb65e365d39f0df2dcef9236886809956"
+  "built_at_commit": "2590bc36eeeb4e91f2f537a4dc247b75100c2c45"
 }
