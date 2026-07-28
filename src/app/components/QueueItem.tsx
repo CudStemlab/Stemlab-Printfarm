@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { PrintJob } from '../types';
-import { FileText, Check, Download, Layers, User, Mail, Trash2, Box } from 'lucide-react';
+import { FileText, Check, Download, User, Mail, Trash2, Box } from 'lucide-react';
 import { Button } from './ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover';
 import { QueueModelViewerDialog } from './QueueModelViewerDialog';
@@ -12,7 +12,6 @@ interface QueueItemProps {
   onRemove?: (jobId: string) => void;
   onDelete?: (jobId: string) => void;
   onDownload?: (job: PrintJob) => void;
-  onOpenInSlicer?: (job: PrintJob) => void;
   canManage?: boolean;
   canDelete?: boolean;
   canDownload?: boolean;
@@ -25,7 +24,6 @@ export function QueueItem({
   onRemove,
   onDelete,
   onDownload,
-  onOpenInSlicer,
   canManage = true,
   canDelete = false,
   canDownload = true,
@@ -92,19 +90,6 @@ export function QueueItem({
                   title="Download file"
                 >
                   <Download className="size-4 text-blue-500" />
-                </Button>
-              )}
-              {canDownload && job.stlFileUrl && (
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onOpenInSlicer?.(job);
-                  }}
-                  title="Open in slicer"
-                >
-                  <Layers className="size-4 text-purple-500" />
                 </Button>
               )}
               {canManage && mode === 'queue' && (

@@ -133,31 +133,6 @@ export function Queue() {
     }
   };
 
-  const handleOpenInSlicer = (job: PrintJob) => {
-    if (!job.stlFileUrl) {
-      toast.error('No file available for this submission');
-      return;
-    }
-
-    try {
-      const parsedUrl = new URL(job.stlFileUrl, window.location.origin);
-      const isSameOrigin = parsedUrl.origin === window.location.origin;
-      if (isSameOrigin) {
-        // Serve as Content-Disposition: inline so the OS dispatches to the
-        // registered slicer (OrcaSlicer, PrusaSlicer, Bambu Studio, etc.)
-        parsedUrl.searchParams.set('open', '1');
-        window.open(parsedUrl.toString(), '_blank', 'noopener,noreferrer');
-        toast.success('File opened – your slicer should launch automatically');
-        return;
-      }
-    } catch {
-      // Fall through for unparseable URLs.
-    }
-
-    window.open(job.stlFileUrl, '_blank', 'noopener,noreferrer');
-    toast.success('File opened – your slicer should launch automatically');
-  };
-
   const handleDownload = (job: PrintJob) => {
     if (!job.stlFileUrl) {
       toast.error('No file link available for this submission');
@@ -303,7 +278,6 @@ export function Queue() {
                     onRemove={canManageQueue ? handleRemove : undefined}
                     onDelete={canDeleteQueueJobs ? handleDeleteQueueJob : undefined}
                     onDownload={canDownloadQueueFiles ? handleDownload : undefined}
-                    onOpenInSlicer={canDownloadQueueFiles ? handleOpenInSlicer : undefined}
                     canManage={canManageQueue}
                     canDelete={canDeleteQueueJobs}
                     canDownload={canDownloadQueueFiles}
@@ -342,7 +316,6 @@ export function Queue() {
                       mode="history"
                       onDelete={canDeleteQueueJobs ? handleDeleteQueueJob : undefined}
                       onDownload={canDownloadQueueFiles ? handleDownload : undefined}
-                      onOpenInSlicer={canDownloadQueueFiles ? handleOpenInSlicer : undefined}
                       canManage={false}
                       canDelete={canDeleteQueueJobs}
                       canDownload={canDownloadQueueFiles}

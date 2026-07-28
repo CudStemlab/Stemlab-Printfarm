@@ -495,8 +495,8 @@
     "semantic_hash": ""
   },
   "src/app/components/QueueItem.tsx": {
-    "mtime": 1785255530.9310603,
-    "ast_hash": "303aaa662a3e7dcbebe4b29ae6ea1991",
+    "mtime": 1785256064.7808912,
+    "ast_hash": "a34b0dca90dc5e2ff753a8fea63c0fb1",
     "semantic_hash": ""
   },
   "src/app/components/SamlSsoSettings.tsx": {
@@ -950,8 +950,8 @@
     "semantic_hash": ""
   },
   "src/app/pages/Queue.tsx": {
-    "mtime": 1785255547.8067763,
-    "ast_hash": "47080779b4bd76d3c911582906a0d0f8",
+    "mtime": 1785256078.0306602,
+    "ast_hash": "6e9715b0d53d28feffc0473c8b5f543a",
     "semantic_hash": ""
   },
   "src/app/pages/Root.tsx": {
