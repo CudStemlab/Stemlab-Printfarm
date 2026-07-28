@@ -1,8 +1,10 @@
 import { useState } from 'react';
 import { PrintJob } from '../types';
-import { FileText, Check, Download, Layers, User, Mail, Trash2 } from 'lucide-react';
+import { FileText, Check, Download, User, Mail, Trash2, Eye } from 'lucide-react';
 import { Button } from './ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover';
+import { QueueModelViewerDialog } from './QueueModelViewerDialog';
+import { detectModelFormat } from '../lib/modelFormats';
 
 interface QueueItemProps {
   job: PrintJob;
@@ -10,10 +12,10 @@ interface QueueItemProps {
   onRemove?: (jobId: string) => void;
   onDelete?: (jobId: string) => void;
   onDownload?: (job: PrintJob) => void;
-  onOpenInSlicer?: (job: PrintJob) => void;
   canManage?: boolean;
   canDelete?: boolean;
   canDownload?: boolean;
+  canPreview?: boolean;
 }
 
 export function QueueItem({
@@ -22,12 +24,19 @@ export function QueueItem({
   onRemove,
   onDelete,
   onDownload,
-  onOpenInSlicer,
   canManage = true,
   canDelete = false,
   canDownload = true,
+  canPreview = false,
 }: QueueItemProps) {
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+
+  // hasFile is true only when the bytes are actually stored in the database, so
+  // this covers three cases at once: legacy external links (Drive URLs we could
+  // not fetch cross-origin anyway), history rows (marking a job printed nulls
+  // file_content), and unprivileged sessions (the server omits hasFile from the
+  // public queue projection entirely). No mode check is needed on top.
+  const showPreview = canPreview && !!job.hasFile && detectModelFormat(job.filename) !== null;
 
   const formatDate = (dateString?: string) => {
     if (!dateString) return '';
@@ -57,6 +66,19 @@ export function QueueItem({
             </div>
 
             <div className="flex items-center gap-1 flex-wrap -ml-2 sm:ml-0">
+              {showPreview && (
+                <QueueModelViewerDialog job={job}>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={(e) => e.stopPropagation()}
+                    title="Preview model in 3D"
+                    aria-label="Preview model in 3D"
+                  >
+                    <Eye className="size-4 text-teal-500" />
+                  </Button>
+                </QueueModelViewerDialog>
+              )}
               {canDownload && job.stlFileUrl && (
                 <Button
                   variant="ghost"
@@ -68,19 +90,6 @@ export function QueueItem({
                   title="Download file"
                 >
                   <Download className="size-4 text-blue-500" />
-                </Button>
-              )}
-              {canDownload && job.stlFileUrl && (
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onOpenInSlicer?.(job);
-                  }}
-                  title="Open in slicer"
-                >
-                  <Layers className="size-4 text-purple-500" />
                 </Button>
               )}
               {canManage && mode === 'queue' && (
