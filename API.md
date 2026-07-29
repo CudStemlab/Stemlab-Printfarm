@@ -321,20 +321,22 @@ the cookie-session frontend.
 ### Status Lights — `/api/v1/status-light` (also `/api/status-light/*`, cookie-session)
 
 Per-printer ESP32-C3 RGB status lights (see `server/statusLightBroker.js` and
-`firmware/status-light/`). The `web` service embeds an MQTT broker (aedes): raw
-TCP on `MQTT_PORT` (host) → `1883` (container), plus MQTT-over-WebSockets at
-`/mqtt` on the normal web port through nginx. Each device joins WiFi, connects to
-the broker, and **subscribes** to its printer's retained status topic
-(`printfarm/printers/<printerId>/status`); the web tier re-reads printer status
-from the DB every `STATUS_LIGHT_PUBLISH_INTERVAL_MS` and publishes any change.
-Devices report liveness via a retained availability topic
+`firmware/status-light/`). The `web` service embeds an MQTT broker (aedes),
+reachable **only** over MQTT-over-WebSockets (wss) at `/mqtt` on the normal web
+port through nginx — there is no raw-TCP listener or extra host port. Each
+device joins WiFi, connects to the broker, and **subscribes** to its printer's
+retained status topic (`printfarm/printers/<printerId>/status`); the web tier
+re-reads printer status from the DB every `STATUS_LIGHT_PUBLISH_INTERVAL_MS` and
+publishes any change. Devices report liveness via a retained availability topic
 (`printfarm/lights/<printerId>/availability`, also the MQTT LWT).
 `STATUS_LIGHT_ENABLED=false` (or the legacy `STATUS_LIGHT_MQTT_ENABLED=false`)
-disables the broker.
+disables the broker. Because it's wss-only, the site needs a certificate the
+device's public-CA bundle trusts (Let's Encrypt-style — a self-signed cert will
+not validate; see `firmware/status-light/README.md`).
 
 | Method & path | Description |
 |---------------|-------------|
-| `GET /status-light/provisioning` | Broker connection parameters + shared credential a device needs: `{ enabled, mqttPort, wsPath, username, password, statusTopic }` (`statusTopic` has a `{printerId}` placeholder). When disabled: `{ enabled: false }`. **Carries the shared broker credential** → `printfarm_manage` on `/api/v1`; admin-only on the frontend mirror. |
+| `GET /status-light/provisioning` | Broker connection parameters + shared credential a device needs: `{ enabled, wsPath, username, password, statusTopic }` (`statusTopic` has a `{printerId}` placeholder). When disabled: `{ enabled: false }`. **Carries the shared broker credential** → `printfarm_manage` on `/api/v1`; admin-only on the frontend mirror. |
 | `GET /status-light/devices` | Lights currently connected: `{ devices: [{ printerId, connected, lastSeen }] }`. `connected` reflects the broker's live connection / availability (LWT) state. No secrets. |
 | `GET /status-light/printers/:id` | The plain status the broker publishes: `{ id, status }` where `status` ∈ `idle\|printing\|paused\|error\|offline` (same live-telemetry overlay as `/api/printers/:id`). Exposed as a read for `/api/v1` parity and debugging; does not affect device presence. `404` if the printer is unknown. |
 
@@ -346,8 +348,9 @@ card** flashes and provisions a device in-browser over Web Serial.
 
 **MQTT contract:** the device authenticates with the shared credential and
 subscribes to `printfarm/printers/<printerId>/status` (retained, plain string).
-The broker/host and transport (`tcp`/`ws`/`wss`) are written to the device
-out-of-band (serial provisioning protocol in `firmware/status-light/README.md`).
+The broker host/port are written to the device out-of-band (serial provisioning
+protocol in `firmware/status-light/README.md`); the dashboard's flash dialog
+always provisions the `wss` transport.
 
 ---
 

@@ -61,18 +61,23 @@ reflash.
 
 ```json
 {"cmd":"provision","wifiSsid":"Lab-WiFi","wifiPassword":"…",
- "mqttTransport":"tcp","mqttHost":"10.0.0.5","mqttPort":1883,"mqttPath":"/mqtt",
+ "mqttTransport":"wss","mqttHost":"farm.example.com","mqttPort":443,"mqttPath":"/mqtt",
  "mqttUsername":"statuslight","mqttPassword":"…","printerId":"printer-1",
  "ledPolarity":"common_cathode"}
 ```
 
 Reply: `{"ok":true,"printerId":"printer-1"}` or `{"ok":false,"error":"…"}`.
 
-- `mqttTransport`: `tcp` (raw MQTT, LAN, host port `MQTT_PORT`, default 1883),
-  `ws` (MQTT over WebSocket at `/mqtt` on the plain-HTTP site port), or `wss`
-  (same over HTTPS, port 443). `wss` validates the certificate against the
-  built-in public-CA bundle — it works with Let's Encrypt-style certs, not
-  self-signed ones (use `ws`/`tcp` on the LAN for those).
+- `mqttTransport`: the dashboard's flash dialog only ever sends `wss` (MQTT over
+  WebSocket at `/mqtt` on the site's HTTPS port) — the server has no raw-TCP
+  MQTT listener to dial (see `server/statusLightBroker.js`). `wss` validates the
+  certificate against the built-in public-CA bundle, so it needs a
+  Let's Encrypt-style cert; a self-signed one will not validate. At the firmware
+  level (`net.cpp`), only `"ws"` and `"wss"` are recognized as WebSocket — any
+  other value (including the previously-used `"tcp"`) falls back to raw
+  `mqtt://`, which has nothing to connect to against this broker. `"ws"` still
+  works against nginx's `/mqtt` route without TLS, if you're provisioning by
+  hand for a plain-HTTP deployment, but the dashboard itself never offers it.
 - The MQTT credential comes from the server (admin-only
   `GET /api/status-light/provisioning`).
 

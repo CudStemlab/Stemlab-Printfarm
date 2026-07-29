@@ -3,11 +3,14 @@
 // printersApi.ts.
 
 export type LedPolarity = 'common_anode' | 'common_cathode';
-export type MqttTransport = 'tcp' | 'ws' | 'wss';
+// wss-only: the broker has no raw-TCP listener, so this is the only transport
+// the dashboard ever provisions. The firmware protocol still accepts other
+// values for manual/serial provisioning (see firmware/status-light/README.md),
+// but nothing in the app ever sends them.
+export type MqttTransport = 'wss';
 
 export interface StatusLightProvisioningInfo {
   enabled: boolean;
-  mqttPort?: number;
   wsPath?: string;
   username?: string;
   password?: string;
