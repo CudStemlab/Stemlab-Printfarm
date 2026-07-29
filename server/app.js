@@ -2914,9 +2914,8 @@ async function buildStatusLightProvisioning() {
   const credential = await ensureBrokerCredential();
   return {
     enabled: true,
-    // The host port compose publishes the raw-TCP listener on (container
-    // always listens on 1883; the ws/wss transport rides the normal web port).
-    mqttPort: Number.parseInt(process.env.MQTT_PORT || '1883', 10) || 1883,
+    // wss-only: the broker has no raw-TCP listener, so there is no separate
+    // port to hand back — devices dial the site's normal HTTPS port at wsPath.
     wsPath: '/mqtt',
     username: credential.username,
     password: credential.password,
@@ -7548,8 +7547,9 @@ httpServer.listen(port, host, () => {
   logger.info('Print Farm server listening', { host, port });
   // Evaluate Home Assistant ⇄ printer automation rules on a background interval.
   startHaAutomationEngine();
-  // ESP32 status-light MQTT broker (raw TCP :1883 + WebSocket upgrade at
-  // /mqtt on this same HTTP server) and its DB→retained-status publisher.
+  // ESP32 status-light MQTT broker (wss-only: WebSocket upgrade at /mqtt on
+  // this same HTTP server, no raw-TCP listener) and its DB→retained-status
+  // publisher.
   startStatusLightBroker({ httpServer }).catch((err) => {
     logger.error('status light broker failed to start', {
       error: err && err.message ? err.message : String(err),
