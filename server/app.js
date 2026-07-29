@@ -98,6 +98,16 @@ import {
   healthStatusFromScore,
   reviveBackupTables,
   restoreBackupSnapshot,
+  createUpdateRun,
+  getActiveUpdateRun,
+  getUpdateRun,
+  listUpdateRuns,
+  listUpdateRunEvents,
+  appendUpdateRunEvent,
+  transitionUpdateRun,
+  lastSuccessfulUpdateRun,
+  lastRollbackUpdateRun,
+  currentSchemaVersion,
 } from './postgres.js';
 import { createZip, readZip } from './zipArchive.js';
 import { verifySlicerGrant } from './slicerGrant.js';
@@ -152,6 +162,8 @@ import {
   getCameraHealth,
   getCameraSnapshot,
 } from './bambuCamera.js';
+import { runUpdatePreflight } from './updatePreflight.js';
+import { normalizeSha, pollRollbackWorkflow, triggerRollbackWorkflow } from './updateRollback.js';
 
 // Bambu Lab printers share one LAN integration (MQTT status/commands, port-6000
 // camera), so they're grouped rather than matched by a single model id.
@@ -1188,6 +1200,21 @@ function runningVersion() {
   return APP_VERSION || BUILD_ID;
 }
 
+// Whether runningVersion() is a real git SHA we can compare against GitHub, or
+// just the index.html hash we fall back to. This distinction matters: BUILD_ID is
+// 16 hex chars that never equal 'dev' and never prefix-match a commit SHA, so a
+// bare `node server/app.js` run (no Docker, so no baked APP_VERSION) with
+// UPDATE_CHECK_REPO set would otherwise report a permanent, un-actionable
+// "update available". Treat anything that isn't a stamped SHA as unstamped.
+function versionSource() {
+  if (!APP_VERSION) return 'build-id';
+  if (APP_VERSION === 'dev') return 'dev';
+  return 'baked';
+}
+function isVersionComparable() {
+  return versionSource() === 'baked';
+}
+
 // Admin "update available" check config. UPDATE_CHECK_REPO ("owner/repo") turns
 // the feature on; when unset the endpoint reports { enabled: false } and the UI
 // hides the card. UPDATE_CHECK_TOKEN (optional) lifts GitHub's 60-req/hr
@@ -1199,6 +1226,22 @@ const UPDATE_CHECK_TOKEN = (process.env.UPDATE_CHECK_TOKEN || '').trim();
 const UPDATE_CHECK_TTL_MS = Number.parseInt(process.env.UPDATE_CHECK_TTL_MS || String(20 * 60 * 1000), 10);
 const WATCHTOWER_URL = (process.env.WATCHTOWER_URL || 'http://watchtower:8080/v1/update').trim();
 const WATCHTOWER_TOKEN = (process.env.WATCHTOWER_TOKEN || '').trim();
+// Rollback config. UPDATE_ROLLBACK_TOKEN is a fine-grained GitHub PAT with
+// `Actions: write` on UPDATE_CHECK_REPO only — it dispatches the rollback
+// workflow that re-points the :latest image tags (see server/updateRollback.js
+// for why the registry write deliberately does not happen in this container).
+const UPDATE_ROLLBACK_TOKEN = (process.env.UPDATE_ROLLBACK_TOKEN || '').trim();
+const UPDATE_ROLLBACK_WORKFLOW = (process.env.UPDATE_ROLLBACK_WORKFLOW || 'rollback.yml').trim();
+// How long a whole run may take (pull + recreate + verify) before the watchdog
+// marks it timed_out, and how many consecutive readiness passes the new version
+// must post to count as succeeded. More than one pass is the point: a container
+// that boots on the new SHA and then crash-loops would otherwise be reported as
+// a successful update, which is exactly the failure this feature has to catch.
+const UPDATE_RUN_DEADLINE_MS = Number.parseInt(process.env.UPDATE_RUN_DEADLINE_MS || String(15 * 60 * 1000), 10);
+const UPDATE_HEALTH_PASSES = Math.max(1, Number.parseInt(process.env.UPDATE_HEALTH_PASSES || '3', 10));
+// Minimum spacing between the health probes that make up those passes — three
+// checks a millisecond apart would prove nothing about a container that stays up.
+const UPDATE_HEALTH_PASS_SPACING_MS = 5000;
 // Cached latest-commit lookup, shared across admins so GitHub is polled at most
 // once per TTL regardless of how many browsers are watching.
 let updateCheckCache = null; // { latest, latestCommittedAt, checkedAt }
@@ -5000,14 +5043,27 @@ async function handleApi(req, res, requestUrl) {
       sendJson(res, 200, { enabled: false, current }, 'no-store');
       return true;
     }
+    // Surfaced even when the GitHub check fails, so the card can still show an
+    // in-flight run and offer a rollback after a bad deploy.
+    const [activeRun, pinnedRun, lastGood] = await Promise.all([
+      getActiveUpdateRun().catch(() => null),
+      lastRollbackUpdateRun().catch(() => null),
+      lastSuccessfulUpdateRun().catch(() => null),
+    ]);
+    const canRollback = UPDATE_ROLLBACK_TOKEN.length > 0 && Boolean(UPDATE_CHECK_REPO);
+    // Roll back to whatever we were running before the last successful update.
+    const rollbackTarget = normalizeSha(lastGood?.fromVersion);
     try {
       const force = requestUrl.searchParams.get('force') === '1';
       const info = await fetchLatestCommit(force);
       const latest = info?.latest || null;
       // Treat a commit as an update only when we know both sides and they differ.
       // A short SHA baked at build time still matches via prefix comparison.
+      // isVersionComparable() rules out builds with no stamped SHA, which would
+      // otherwise never match and report a permanent phantom update.
       const updateAvailable = Boolean(
-        latest && current && current !== 'dev' && !latest.startsWith(current) && !current.startsWith(latest),
+        latest && current && isVersionComparable()
+        && !latest.startsWith(current) && !current.startsWith(latest),
       );
       sendJson(
         res,
@@ -5020,66 +5076,220 @@ async function handleApi(req, res, requestUrl) {
           latestCommittedAt: info?.latestCommittedAt || null,
           checkedAt: info ? new Date(info.checkedAt).toISOString() : null,
           canApply: WATCHTOWER_TOKEN.length > 0,
+          versionSource: versionSource(),
+          canRollback,
+          rollbackTarget,
+          // Set when the running version is the result of a deliberate rollback,
+          // so the card can say "pinned" instead of nagging to re-apply the very
+          // update that was just reverted.
+          pinnedVersion: pinnedRun?.toVersion || null,
+          activeRunId: activeRun?.id || null,
         },
         'no-store',
       );
     } catch (err) {
-      sendJson(res, 200, { enabled: true, current, error: 'update check failed' }, 'no-store');
+      sendJson(res, 200, {
+        enabled: true,
+        current,
+        error: 'update check failed',
+        canApply: WATCHTOWER_TOKEN.length > 0,
+        versionSource: versionSource(),
+        canRollback,
+        rollbackTarget,
+        activeRunId: activeRun?.id || null,
+      }, 'no-store');
     }
     return true;
   }
 
-  // One-click apply: trigger the Watchtower sidecar to pull the newer :latest
-  // images and recreate the app containers. Admin-only (isAdminMutation) and
-  // audited. Watchtower's HTTP API blocks the request until the pull+recreate
-  // cycle finishes, which can take well over a minute — and it will recreate
-  // this very `web` container mid-flight, killing this request outright. So
-  // this handler is decoupled from both the client connection (closing the
-  // browser tab has no effect — nothing here listens for the request socket
-  // to close) and from waiting out Watchtower's full run: the guard timeout is
-  // generous (5 min, just a backstop against a truly hung updater) and, unlike
-  // a genuine connect failure, timing it out is treated as "started" rather
-  // than an error, since the trigger had already reached Watchtower.
+  // Pre-flight checks, no side effects. The UI calls this to render the
+  // checklist before the admin commits to anything.
+  if (requestUrl.pathname === '/api/admin/update/preflight' && req.method === 'GET') {
+    const preflight = await collectUpdatePreflight(
+      requestUrl.searchParams.get('kind') === 'rollback' ? 'rollback' : 'update',
+    );
+    sendJson(res, 200, preflight, 'no-store');
+    return true;
+  }
+
+  // Update-run history. The durable replacement for the old client-side progress
+  // log, which lived in React state and was lost the moment the tab closed —
+  // while the UI told the admin it was safe to close it.
+  if (requestUrl.pathname === '/api/admin/update/runs' && req.method === 'GET') {
+    const runs = await listUpdateRuns(requestUrl.searchParams.get('limit') || 20);
+    sendJson(res, 200, { runs }, 'no-store');
+    return true;
+  }
+
+  // The in-flight run, if any. Polled by the card on mount — which is what makes
+  // progress survive a tab close, a navigation, or a different admin looking.
+  if (requestUrl.pathname === '/api/admin/update/runs/active' && req.method === 'GET') {
+    const run = await getActiveUpdateRun();
+    const events = run ? await listUpdateRunEvents(run.id) : [];
+    sendJson(res, 200, { run, events }, 'no-store');
+    return true;
+  }
+
+  // One run plus its event log.
+  if (/^\/api\/admin\/update\/runs\/\d+$/.test(requestUrl.pathname) && req.method === 'GET') {
+    const runId = requestUrl.pathname.split('/').pop();
+    const run = await getUpdateRun(runId);
+    if (!run) {
+      sendJson(res, 404, { error: 'Update run not found' });
+      return true;
+    }
+    sendJson(res, 200, { run, events: await listUpdateRunEvents(run.id) }, 'no-store');
+    return true;
+  }
+
+  // Abandon a wedged run so the admin isn't locked out by the concurrency guard.
+  // This does NOT stop Watchtower — nothing can, once triggered; it only releases
+  // this app's record of the run. The UI says so explicitly.
+  if (/^\/api\/admin\/update\/runs\/\d+\/cancel$/.test(requestUrl.pathname) && req.method === 'POST') {
+    const runId = requestUrl.pathname.split('/')[5];
+    const run = await getUpdateRun(runId);
+    if (!run) {
+      sendJson(res, 404, { error: 'Update run not found' });
+      return true;
+    }
+    if (!run.active) {
+      sendJson(res, 409, { error: 'That update run has already finished' });
+      return true;
+    }
+    const session = await resolveSession(req);
+    await appendUpdateRunEvent(run.id, `Cancelled by ${session?.username || 'an admin'}.`, 'warn');
+    const cancelled = await transitionUpdateRun(run.id, run.state, 'cancelled', {
+      error: 'Cancelled by an administrator',
+    });
+    await recordAuditLog({
+      actorName: session ? session.name : null,
+      actorUsername: session ? session.username : null,
+      actorRole: session ? session.role : null,
+      action: 'software.update.cancel',
+      target: String(run.id),
+      details: { state: run.state },
+      source: 'web',
+      ip: getClientIp(req),
+    });
+    sendJson(res, 200, { run: cancelled || run });
+    return true;
+  }
+
+  // One-click apply. Unlike the previous fire-and-forget version, this creates a
+  // durable run row first and returns immediately; the watchdog worker below
+  // drives the rest and survives this container being recreated mid-update.
   if (requestUrl.pathname === '/api/admin/update/apply' && req.method === 'POST') {
     if (!WATCHTOWER_TOKEN) {
       sendJson(res, 503, { error: 'One-click update is not configured on this host' });
       return true;
     }
+    const preflight = await collectUpdatePreflight('update');
+    if (!preflight.ok) {
+      // Blocking checks are hard failures with no override — see the severity
+      // contract in server/updatePreflight.js.
+      sendJson(res, 409, { error: 'Pre-flight checks failed', checks: preflight.checks });
+      return true;
+    }
     const session = await resolveSession(req);
+    const latest = updateCheckCache?.latest || null;
+    let run;
+    try {
+      run = await createUpdateRun({
+        kind: 'update',
+        fromVersion: runningVersion(),
+        toVersion: latest,
+        targetTag: 'latest',
+        actorName: session?.name || null,
+        actorUsername: session?.username || null,
+        actorRole: session?.role || null,
+        preflight: { checks: preflight.checks },
+        deadlineMs: UPDATE_RUN_DEADLINE_MS,
+      });
+    } catch (error) {
+      if (error?.conflict) {
+        const active = await getActiveUpdateRun();
+        sendJson(res, 409, { error: 'An update is already running', runId: active?.id || null });
+        return true;
+      }
+      throw error;
+    }
     await recordAuditLog({
       actorName: session ? session.name : null,
       actorUsername: session ? session.username : null,
       actorRole: session ? session.role : null,
       action: 'software.update.apply',
       target: UPDATE_CHECK_REPO || null,
-      details: { current: runningVersion(), latest: updateCheckCache?.latest || null },
+      details: { current: runningVersion(), latest, runId: run.id },
       source: 'web',
       ip: getClientIp(req),
     });
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 5 * 60 * 1000);
+    await appendUpdateRunEvent(run.id, 'Update requested. Pre-flight checks passed.');
+    // Fire-and-forget: the worker owns the run from here, so the browser gets an
+    // immediate runId instead of holding a request open across its own restart.
+    void startWatchtowerUpdate(run);
+    sendJson(res, 202, { started: true, runId: run.id });
+    return true;
+  }
+
+  // Roll back to a previously published commit. Dispatches the CI workflow that
+  // re-points the :latest tags, then triggers Watchtower exactly like a forward
+  // update — see server/updateRollback.js for why the registry write is not done
+  // from this container.
+  if (requestUrl.pathname === '/api/admin/update/rollback' && req.method === 'POST') {
+    if (!UPDATE_ROLLBACK_TOKEN || !UPDATE_CHECK_REPO) {
+      sendJson(res, 503, { error: 'Rollback is not configured on this host' });
+      return true;
+    }
+    if (!WATCHTOWER_TOKEN) {
+      sendJson(res, 503, { error: 'One-click update is not configured on this host' });
+      return true;
+    }
+    const body = await readJsonBody(req);
+    const targetVersion = normalizeSha(body?.targetVersion);
+    if (!targetVersion) {
+      sendJson(res, 400, { error: 'A valid target commit is required' });
+      return true;
+    }
+    const preflight = await collectUpdatePreflight('rollback');
+    if (!preflight.ok) {
+      sendJson(res, 409, { error: 'Pre-flight checks failed', checks: preflight.checks });
+      return true;
+    }
+    const session = await resolveSession(req);
+    let run;
     try {
-      const resp = await fetch(WATCHTOWER_URL, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${WATCHTOWER_TOKEN}` },
-        signal: controller.signal,
+      run = await createUpdateRun({
+        kind: 'rollback',
+        fromVersion: runningVersion(),
+        toVersion: targetVersion,
+        targetTag: `sha-${targetVersion.slice(0, 12)}`,
+        actorName: session?.name || null,
+        actorUsername: session?.username || null,
+        actorRole: session?.role || null,
+        preflight: { checks: preflight.checks },
+        deadlineMs: UPDATE_RUN_DEADLINE_MS,
       });
-      if (!resp.ok) {
-        sendJson(res, 502, { error: `Updater responded ${resp.status}` });
+    } catch (error) {
+      if (error?.conflict) {
+        const active = await getActiveUpdateRun();
+        sendJson(res, 409, { error: 'An update is already running', runId: active?.id || null });
         return true;
       }
-      sendJson(res, 202, { started: true });
-    } catch (err) {
-      if (err?.name === 'AbortError') {
-        // Our own backstop fired, not a connect failure — the trigger reached
-        // Watchtower and the update is very likely underway.
-        sendJson(res, 202, { started: true });
-      } else {
-        sendJson(res, 502, { error: 'Could not reach the updater service' });
-      }
-    } finally {
-      clearTimeout(timer);
+      throw error;
     }
+    await recordAuditLog({
+      actorName: session ? session.name : null,
+      actorUsername: session ? session.username : null,
+      actorRole: session ? session.role : null,
+      action: 'software.update.rollback',
+      target: UPDATE_CHECK_REPO || null,
+      details: { current: runningVersion(), targetVersion, runId: run.id },
+      source: 'web',
+      ip: getClientIp(req),
+    });
+    await appendUpdateRunEvent(run.id, `Rollback to ${targetVersion.slice(0, 7)} requested.`);
+    void startRollback(run, targetVersion);
+    sendJson(res, 202, { started: true, runId: run.id });
     return true;
   }
 
@@ -7003,6 +7213,258 @@ function scheduleMaintenanceWorker() {
   }, MAINTENANCE_WORKER_INTERVAL_MS).unref();
 }
 scheduleMaintenanceWorker();
+
+// ---------------------------------------------------------------------------
+// Software update run lifecycle
+// ---------------------------------------------------------------------------
+// An update replaces the container running this code, so nothing here may rely
+// on staying alive: the run's state lives in Postgres, every step is a
+// conditional transition, and the watchdog below re-attaches to an in-flight run
+// when the NEW container boots. That is what lets the UI honestly say "safe to
+// close this tab" — the old implementation said it while keeping the only copy
+// of the progress log in browser memory.
+
+// Gathers the inputs the preflight module needs from this module's config.
+async function collectUpdatePreflight(kind = 'update') {
+  const readiness = await checkReadiness().catch(() => ({ checks: {} }));
+  const schemaVersion = await currentSchemaVersion().catch(() => null);
+  return runUpdatePreflight({
+    kind,
+    versionComparable: isVersionComparable(),
+    databaseOk: readiness.checks?.database === 'ok',
+    watchtowerUrl: WATCHTOWER_URL,
+    canApply: WATCHTOWER_TOKEN.length > 0,
+    rollbackConfigured: UPDATE_ROLLBACK_TOKEN.length > 0 && Boolean(UPDATE_CHECK_REPO),
+    schemaVersion,
+  });
+}
+
+// POSTs the trigger to Watchtower and moves the run to 'applying'. Watchtower's
+// HTTP API blocks until its whole pull+recreate cycle finishes and will kill this
+// very container partway through, so an aborted request is expected and is NOT an
+// error — the trigger had already landed. Only a transport failure means the
+// update never started.
+async function triggerWatchtower(run) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 5 * 60 * 1000);
+  try {
+    const resp = await fetch(WATCHTOWER_URL, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${WATCHTOWER_TOKEN}` },
+      signal: controller.signal,
+    });
+    if (!resp.ok) {
+      logger.error('watchtower trigger rejected', { status: resp.status });
+      return { ok: false, error: 'The updater service rejected the request' };
+    }
+    return { ok: true };
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      return { ok: true };
+    }
+    logger.error('watchtower trigger failed', { error: error?.message });
+    return { ok: false, error: 'Could not reach the updater service' };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function startWatchtowerUpdate(run) {
+  const moved = await transitionUpdateRun(run.id, 'queued', 'triggering');
+  if (!moved) return; // another process already owns this run
+  await appendUpdateRunEvent(run.id, 'Asking the updater to pull the new images…');
+  const result = await triggerWatchtower(run);
+  if (!result.ok) {
+    await appendUpdateRunEvent(run.id, result.error, 'error');
+    await transitionUpdateRun(run.id, 'triggering', 'failed', { error: result.error });
+    return;
+  }
+  await appendUpdateRunEvent(run.id, 'Updater accepted the request. Containers will restart shortly.');
+  await transitionUpdateRun(run.id, 'triggering', 'applying');
+}
+
+async function startRollback(run, targetVersion) {
+  const moved = await transitionUpdateRun(run.id, 'queued', 'retagging');
+  if (!moved) return;
+  await appendUpdateRunEvent(run.id, 'Starting the rollback job to republish the older version…');
+  const result = await triggerRollbackWorkflow({
+    repo: UPDATE_CHECK_REPO,
+    branch: UPDATE_CHECK_BRANCH,
+    workflow: UPDATE_ROLLBACK_WORKFLOW,
+    token: UPDATE_ROLLBACK_TOKEN,
+    targetSha: targetVersion,
+  });
+  if (!result.ok) {
+    await appendUpdateRunEvent(run.id, result.error, 'error');
+    await transitionUpdateRun(run.id, 'retagging', 'failed', { error: result.error });
+    return;
+  }
+  // The watchdog polls the workflow from here; stash the dispatch time so a
+  // restart mid-rollback can still correlate the run.
+  await transitionUpdateRun(run.id, 'retagging', 'retagging', {
+    health: { rollbackDispatchedAt: result.dispatchedAt },
+  });
+  await appendUpdateRunEvent(run.id, 'Rollback job queued. Waiting for the older images to be republished…');
+}
+
+// One watchdog pass. Deliberately does the minimum per tick and re-reads state
+// from the database each time, so two overlapping containers can both run it
+// safely (the conditional transitions make the loser a no-op).
+async function runUpdateWatchdogPass() {
+  const run = await getActiveUpdateRun();
+  if (!run) return;
+
+  if (Date.now() > new Date(run.deadlineAt).getTime()) {
+    // Transition first: only the pass that actually wins the state change should
+    // write the log line, or two overlapping containers double-report.
+    const timedOut = await transitionUpdateRun(run.id, run.state, 'timed_out', {
+      error: 'Timed out waiting for the update to finish',
+    });
+    if (timedOut) {
+      await appendUpdateRunEvent(
+        run.id,
+        'Timed out waiting for the update to finish. Check the running version, and roll back if the app is unhealthy.',
+        'error',
+      );
+    }
+    return;
+  }
+
+  // Recovery for a run stranded by this container dying at exactly the wrong
+  // moment. Without these two branches the run would sit untouched until its
+  // deadline — a 15-minute stall for what is usually a recoverable hiccup.
+  if (run.state === 'queued') {
+    // The row was written but the trigger never went out (or we cannot tell).
+    // Re-drive it; the conditional transition inside makes this safe to retry.
+    if (run.kind === 'rollback' && run.toVersion) {
+      await startRollback(run, run.toVersion);
+    } else {
+      await startWatchtowerUpdate(run);
+    }
+    return;
+  }
+
+  if (run.state === 'triggering') {
+    // We were mid-POST to the updater when the process ended. If this process is
+    // a fresh container at all, the recreate it was asking for has happened — so
+    // hand over to the normal arrival check rather than re-triggering a pull.
+    await transitionUpdateRun(run.id, 'triggering', 'applying');
+    return;
+  }
+
+  if (run.state === 'retagging') {
+    const dispatchedAt = Number(run.health?.rollbackDispatchedAt) || Date.now();
+    const poll = await pollRollbackWorkflow({
+      repo: UPDATE_CHECK_REPO,
+      workflow: UPDATE_ROLLBACK_WORKFLOW,
+      token: UPDATE_ROLLBACK_TOKEN,
+      dispatchedAt,
+    });
+    if (poll.status === 'succeeded') {
+      await appendUpdateRunEvent(run.id, 'Older version republished. Asking the updater to pull it…');
+      const moved = await transitionUpdateRun(run.id, 'retagging', 'triggering');
+      if (!moved) return;
+      const result = await triggerWatchtower(run);
+      if (!result.ok) {
+        await appendUpdateRunEvent(run.id, result.error, 'error');
+        await transitionUpdateRun(run.id, 'triggering', 'failed', { error: result.error });
+        return;
+      }
+      await transitionUpdateRun(run.id, 'triggering', 'applying');
+      await appendUpdateRunEvent(run.id, 'Updater accepted the request. Containers will restart shortly.');
+    } else if (poll.status === 'failed') {
+      await appendUpdateRunEvent(run.id, poll.detail || 'The rollback job failed', 'error');
+      await transitionUpdateRun(run.id, 'retagging', 'failed', { error: poll.detail || 'The rollback job failed' });
+    }
+    return;
+  }
+
+  if (run.state === 'applying') {
+    // We are the new container if our own version now matches the target. When
+    // toVersion is unknown (the GitHub check was down at request time), any
+    // change away from fromVersion counts.
+    const current = runningVersion();
+    const target = run.toVersion;
+    const arrived = target
+      ? (current.startsWith(target) || target.startsWith(current))
+      : current !== run.fromVersion;
+    if (arrived) {
+      await appendUpdateRunEvent(run.id, `Now running ${current.slice(0, 7)}. Verifying health…`);
+      await transitionUpdateRun(run.id, 'applying', 'verifying', {
+        toVersion: current,
+        health: { passes: 0, lastCheck: null },
+      });
+    }
+    return;
+  }
+
+  if (run.state === 'verifying') {
+    const health = run.health || {};
+    const lastCheck = Number(health.lastCheck) || 0;
+    // Space the probes out: three checks in the same second would prove nothing
+    // about a container that comes up and then falls over.
+    if (Date.now() - lastCheck < UPDATE_HEALTH_PASS_SPACING_MS) return;
+    const readiness = await checkReadiness().catch(() => ({ ok: false }));
+    if (!readiness.ok) {
+      // Reset rather than fail: a single blip mid-restart is normal. Sustained
+      // failure is caught by the deadline, which is the crash-loop case.
+      await transitionUpdateRun(run.id, 'verifying', 'verifying', {
+        health: { ...health, passes: 0, lastCheck: Date.now() },
+      });
+      return;
+    }
+    const passes = (Number(health.passes) || 0) + 1;
+    if (passes < UPDATE_HEALTH_PASSES) {
+      await transitionUpdateRun(run.id, 'verifying', 'verifying', {
+        health: { ...health, passes, lastCheck: Date.now() },
+      });
+      return;
+    }
+    // Transition first so only the winner logs and audits the completion.
+    const succeeded = await transitionUpdateRun(run.id, 'verifying', 'succeeded', {
+      health: { ...health, passes, lastCheck: Date.now() },
+    });
+    if (!succeeded) return;
+    await appendUpdateRunEvent(
+      run.id,
+      `Update complete — ${runningVersion().slice(0, 7)} is healthy (${passes} consecutive checks).`,
+    );
+    await recordAuditLog({
+      actorName: run.actorName,
+      actorUsername: run.actorUsername,
+      actorRole: run.actorRole,
+      action: run.kind === 'rollback' ? 'software.update.rollback.succeeded' : 'software.update.succeeded',
+      target: UPDATE_CHECK_REPO || null,
+      details: { from: run.fromVersion, to: runningVersion(), runId: run.id },
+      source: 'web',
+      ip: null,
+    });
+  }
+}
+
+const UPDATE_WATCHDOG_INTERVAL_MS = 5000;
+let updateWatchdogRunning = false;
+function scheduleUpdateRunWorker() {
+  setInterval(() => {
+    if (updateWatchdogRunning) return; // never overlap passes
+    updateWatchdogRunning = true;
+    runUpdateWatchdogPass()
+      .catch((error) => logger.error('update watchdog pass failed', error))
+      .finally(() => {
+        updateWatchdogRunning = false;
+      });
+  }, UPDATE_WATCHDOG_INTERVAL_MS).unref();
+}
+// Started at import, which is the whole trick: the container Watchtower just
+// created runs this on boot, finds the in-flight run in Postgres, and finishes
+// verifying it. No separate resume path needed.
+//
+// Known floor: if the new web container never starts at all, nobody runs this
+// and the run only resolves once some web comes back (or the deadline passes on
+// a later boot). Health-checking from inside the thing being updated cannot do
+// better; compose `restart: unless-stopped` plus the web healthcheck is the real
+// backstop there.
+scheduleUpdateRunWorker();
 
 // ---------------------------------------------------------------------------
 // Filament Station deferred-assignment replay worker (plan §4, actuation half)

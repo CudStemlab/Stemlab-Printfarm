@@ -37,30 +37,54 @@
 # needs Docker Compose v2.24.4+ (Jan 2024); on older Compose, delete those
 # `build: !reset null` lines and run with `docker compose pull` first so the
 # pulled image is used instead of a local rebuild.
+#
+# WATCHTOWER SCOPE: the `com.centurylinklabs.watchtower.enable=true` label below
+# appears on the six app services and on NOTHING else. Paired with
+# `--label-enable` on the watchtower command, that is what keeps an update from
+# touching `db`, `redis`, `prometheus` — or watchtower itself. Without it
+# Watchtower considers every running container on the host and will happily
+# recreate your database if its tag moved.
+#
+# ⚠️ Labels are baked in at container-CREATE time, so applying this needs a
+# `docker compose up -d` on the deploy host. A bare `docker compose pull` leaves
+# the existing containers unlabelled, and Watchtower would then see nothing to
+# update at all (label-enable with zero labelled containers = no-op).
 services:
   web:
     build: !reset null
     image: ${IMAGE_PREFIX:?set IMAGE_PREFIX to the Docker Hub namespace}/printfarm-web:latest
+    labels:
+      com.centurylinklabs.watchtower.enable: "true"
 
   nginx:
     build: !reset null
     image: ${IMAGE_PREFIX:?set IMAGE_PREFIX}/printfarm-nginx:latest
+    labels:
+      com.centurylinklabs.watchtower.enable: "true"
 
   poller:
     build: !reset null
     image: ${IMAGE_PREFIX:?set IMAGE_PREFIX}/printfarm-poller:latest
+    labels:
+      com.centurylinklabs.watchtower.enable: "true"
 
   exporter:
     build: !reset null
     image: ${IMAGE_PREFIX:?set IMAGE_PREFIX}/printfarm-exporter:latest
+    labels:
+      com.centurylinklabs.watchtower.enable: "true"
 
   slicer-proxy:
     build: !reset null
     image: ${IMAGE_PREFIX:?set IMAGE_PREFIX}/printfarm-slicer-proxy:latest
+    labels:
+      com.centurylinklabs.watchtower.enable: "true"
 
   mcp:
     build: !reset null
     image: ${IMAGE_PREFIX:?set IMAGE_PREFIX}/printfarm-mcp:latest
+    labels:
+      com.centurylinklabs.watchtower.enable: "true"
 
   # On-demand updater. Runs no periodic poll — it only acts when the web server
   # POSTs to its HTTP API (the admin's "Update now" click), then pulls the newer
@@ -82,5 +106,9 @@ services:
     command:
       - "--http-api-update"
       - "--cleanup"
+      # Only touch containers carrying the watchtower.enable label (the six app
+      # services above). Without this Watchtower manages EVERY container on the
+      # host — including db and redis. See the scope note near the top of this file.
+      - "--label-enable"
       - "--http-api-token"
       - "${WATCHTOWER_TOKEN:?set WATCHTOWER_TOKEN to enable one-click updates}"
