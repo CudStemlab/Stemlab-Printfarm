@@ -345,8 +345,8 @@
     "semantic_hash": "27cf1e3591e961fcb8ee9033cd85bab4"
   },
   "server/app.js": {
-    "mtime": 1785490650.1365967,
-    "ast_hash": "f3b30251145beedd16d31f86a9a76349",
+    "mtime": 1785488856.1277945,
+    "ast_hash": "848e4bfd9f43b1cf23dcff0cc5234ddf",
     "semantic_hash": ""
   },
   "server/bambuCamera.js": {
@@ -378,6 +378,11 @@
     "mtime": 1785488577.4478252,
     "ast_hash": "c0d0fa237022dcd03ee91a914776e676",
     "semantic_hash": "c0d0fa237022dcd03ee91a914776e676"
+  },
+  "server/samlSp.js": {
+    "mtime": 1785488577.4478252,
+    "ast_hash": "f19426c5491d0a3d2eacd7d41951c841",
+    "semantic_hash": ""
   },
   "server/secretCrypto.js": {
     "mtime": 1785488577.4488251,
@@ -459,6 +464,11 @@
     "ast_hash": "b55c15a313e2ca07858a8e0a7a933b85",
     "semantic_hash": ""
   },
+  "src/app/components/OAuthProviderSettings.tsx": {
+    "mtime": 1785488990.6587796,
+    "ast_hash": "43a2b73ef66d82672c7f507ff26f1b08",
+    "semantic_hash": ""
+  },
   "src/app/components/PrintRequestDialog.tsx": {
     "mtime": 1785488577.465825,
     "ast_hash": "3132f719e632a2548a5b83bc2f6264b0",
@@ -487,6 +497,11 @@
   "src/app/components/QueueItem.tsx": {
     "mtime": 1785488577.4698253,
     "ast_hash": "9d12b364736ebbfecfc100c68910fe8e",
+    "semantic_hash": ""
+  },
+  "src/app/components/SamlSsoSettings.tsx": {
+    "mtime": 1785488577.4708252,
+    "ast_hash": "c9edb8bc4c068a4820a287dd765908b5",
     "semantic_hash": ""
   },
   "src/app/components/SoftwareUpdateSettings.tsx": {
@@ -810,8 +825,8 @@
     "semantic_hash": ""
   },
   "src/app/lib/oauthApi.ts": {
-    "mtime": 1785490312.616634,
-    "ast_hash": "8b5ed19dcfb7ecbdc646f5473cbcb319",
+    "mtime": 1785488899.8867896,
+    "ast_hash": "4d8c1aec10380d2248ece9b2e9aa9c1b",
     "semantic_hash": ""
   },
   "src/app/lib/printerProfiles.ts": {
@@ -839,6 +854,11 @@
     "ast_hash": "5541a2ed6490a800b25ba145843bae68",
     "semantic_hash": "5541a2ed6490a800b25ba145843bae68"
   },
+  "src/app/lib/samlApi.ts": {
+    "mtime": 1785488577.5008252,
+    "ast_hash": "a4debda2b14f510a14e28505424e95b3",
+    "semantic_hash": "a4debda2b14f510a14e28505424e95b3"
+  },
   "src/app/lib/settingsApi.ts": {
     "mtime": 1785488577.5008252,
     "ast_hash": "314179b13959dd62d27d78fb12107138",
@@ -855,9 +875,9 @@
     "semantic_hash": ""
   },
   "src/app/lib/ssoApi.ts": {
-    "mtime": 1785490622.4915998,
-    "ast_hash": "be9df165bad2355c5ef29a15a25165fe",
-    "semantic_hash": ""
+    "mtime": 1785488577.5028253,
+    "ast_hash": "4e57899eccb9b8a55930cb029e986918",
+    "semantic_hash": "4e57899eccb9b8a55930cb029e986918"
   },
   "src/app/lib/updateApi.ts": {
     "mtime": 1785488577.504825,
@@ -900,8 +920,8 @@
     "semantic_hash": "4609d5d0c447799d71defdfeba38cdd1"
   },
   "src/app/pages/Login.tsx": {
-    "mtime": 1785490410.2006233,
-    "ast_hash": "69121f44819a960d9a3a0c6e7dfce679",
+    "mtime": 1785489043.0307739,
+    "ast_hash": "f663009ed20d65930a4811c150695e0a",
     "semantic_hash": ""
   },
   "src/app/pages/Logs.tsx": {
@@ -940,8 +960,8 @@
     "semantic_hash": ""
   },
   "src/app/pages/Settings.tsx": {
-    "mtime": 1785490370.3866277,
-    "ast_hash": "f3e210d9d1bfaf212f9f2a943ea53497",
+    "mtime": 1785489020.3087764,
+    "ast_hash": "604562ce725b11280c47445e507ae80c",
     "semantic_hash": ""
   },
   "src/app/routes.tsx": {
@@ -970,8 +990,8 @@
     "semantic_hash": ""
   },
   "API.md": {
-    "mtime": 1785490576.118605,
-    "ast_hash": "5f3c4daf23963949f7e6c64a834073f0",
+    "mtime": 1785489145.0277627,
+    "ast_hash": "39d9d5915b043964e69b15b62d8aee77",
     "semantic_hash": ""
   },
   "CLAUDE.md": {
@@ -1005,8 +1025,8 @@
     "semantic_hash": ""
   },
   "docker-compose.yml": {
-    "mtime": 1785490444.8386195,
-    "ast_hash": "7539d24d3d53c44c6d9c1d365fe61f13",
+    "mtime": 1785488577.0238252,
+    "ast_hash": "fb34df4e9d77da594b06c7f8b36d1697",
     "semantic_hash": ""
   },
   "exporter/requirements.txt": {
@@ -1435,8 +1455,8 @@
     "semantic_hash": ""
   },
   "mcp/adminPolicy.js": {
-    "mtime": 1785490633.5075986,
-    "ast_hash": "994c26321e99f5ce84c2c7af3af5446e",
+    "mtime": 1785488577.3978252,
+    "ast_hash": "22a4c2bb25aa812044fc88db85d68940",
     "semantic_hash": ""
   },
   "nginx/docker-entrypoint.d/15-mcp-access.sh": {
@@ -1450,13 +1470,13 @@
     "semantic_hash": ""
   },
   "server/rbac.js": {
-    "mtime": 1785490629.2935991,
-    "ast_hash": "1bf8886c8cc1b224a18614539f2823fb",
+    "mtime": 1785488577.4468253,
+    "ast_hash": "3f77d4242366a760001d2f9dd999a0c4",
     "semantic_hash": ""
   },
   "server/rbac.test.mjs": {
-    "mtime": 1785490195.0076468,
-    "ast_hash": "635e7f0cb55829c1220604297cfdcd1c",
+    "mtime": 1785488577.4468253,
+    "ast_hash": "629e088221a2cfe0b836ddd5ce9c6c2e",
     "semantic_hash": ""
   },
   "server/statusLightBroker.js": {
@@ -1572,11 +1592,6 @@
   ".github/workflows/rollback.yml": {
     "mtime": 1785488577.0098252,
     "ast_hash": "1b141c4c64033c295fa08527e9b25d3b",
-    "semantic_hash": ""
-  },
-  "src/app/components/KeycloakSsoSettings.tsx": {
-    "mtime": 1785490294.8454032,
-    "ast_hash": "5fa0888efa641109ed18f1888f7f23b4",
     "semantic_hash": ""
   }
 }

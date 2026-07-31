@@ -70,7 +70,7 @@ services:
     cap_drop:
       - ALL
     # Both tiers: `frontend` for the nginx reverse proxy and outbound egress
-    # (GitHub update check, OAuth/SAML IdPs, Discord webhooks, printer LAN);
+    # (GitHub update check, the OAuth IdP, Discord webhooks, printer LAN);
     # `backend` for db/redis. Being on `backend` is what lets web reach the DB
     # while db itself stays off the edge.
     networks: [frontend, backend]
@@ -104,8 +104,8 @@ services:
       MAX_BODY_BYTES: ${MAX_BODY_BYTES:-1048576}
       # Shared with slicer-proxy: verifies the signed slicer operator-grant token.
       SLICER_GRANT_SECRET: ${SLICER_GRANT_SECRET:-}
-      # Public origin used to build OAuth redirect_uri / SAML ACS URLs when no
-      # admin override is set in Settings → Sign-in ("SSO public URL", which
+      # Public origin used to build the OAuth redirect_uri when no admin
+      # override is set in Settings → Sign-in ("SSO public URL", which
       # takes precedence over this). Set this to the site's public HTTPS URL
       # (e.g. https://sso.stemlabs2.work) so SSO callbacks use the right address
       # even when nginx doesn't forward the host. Leave empty to fall back to

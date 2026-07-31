@@ -597,7 +597,7 @@ classified below requires an admin session.
 | --- | --- | --- |
 | **public read** | anyone | `GET /api/printers`, `GET /api/analytics/daily`, `GET /api/cameras/health`, `GET /api/maintenance`, `GET /api/maintenance/notifications`, `GET /api/printers/:id/maintenance`, `GET /api/settings/maintenance-intervals`, `GET /api/settings/favicon`, `GET /api/events`, `GET /api/status-light/devices`, `GET /api/status-light/printers/:id`, branding/layout reads |
 | **viewer-gated read** | anyone when `VITE_PUBLIC_VIEWER_MODE=true`, else any session | `GET /api/queue`, `GET /api/maintenance/summary` — public only while the anonymous viewer dashboard is enabled; otherwise a session is required so a non-public deployment doesn't leak queue contents / fleet health |
-| **admin read** | admin only | `GET /api/users`, `GET /api/slicer-keys`, `GET /api/audit-logs`, `GET /api/admin/update-status`, `GET /api/admin/update/preflight`, `GET /api/admin/update/runs*`, `GET /api/admin/backup/download`, `GET /api/notifications/*`, `GET /api/manager/requests`, `GET /api/settings/saml`, `GET /api/settings/home-assistant*`, `GET /api/status-light/provisioning` |
+| **admin read** | admin only | `GET /api/users`, `GET /api/slicer-keys`, `GET /api/audit-logs`, `GET /api/admin/update-status`, `GET /api/admin/update/preflight`, `GET /api/admin/update/runs*`, `GET /api/admin/backup/download`, `GET /api/notifications/*`, `GET /api/manager/requests`, `GET /api/settings/home-assistant*`, `GET /api/status-light/provisioning` |
 | **public mutation** | anyone | `POST /api/queue/submit` (student intake), `POST /api/manager/request`, the auth endpoints above |
 | **operator** | operator or admin | `POST /api/printers` (create/edit/reorder), `POST /api/printers/:id/command`, `POST /api/queue/:id/printed`, `POST /api/maintenance/:id/complete`, `POST /api/maintenance/notifications/read` |
 | **authed** | any session | `POST /api/audit-logs` (actor is taken from the session, not the body) |
@@ -656,10 +656,10 @@ Denials return `401` (no/expired session) or `403` (insufficient role).
 > same-origin request — the `Origin` (or `Referer`) hostname must match the
 > request host, else `403 {"error":"Cross-origin request blocked."}`. This is
 > defense-in-depth on top of the `SameSite=Lax` session cookie. It does **not**
-> apply to the **public mutation** endpoints (so the IdP's cross-origin SAML ACS
-> POST and the CORS manager-request API still work), nor to the key-gated
-> `/api/v1` surface. Requests with no `Origin`/`Referer` (curl, server-to-server)
-> are allowed — use `/api/v1` with an API key for automation.
+> apply to the **public mutation** endpoints (so the CORS manager-request API
+> still works), nor to the key-gated `/api/v1` surface. Requests with no
+> `Origin`/`Referer` (curl, server-to-server) are allowed — use `/api/v1` with
+> an API key for automation.
 
 ### Version endpoint
 
@@ -732,7 +732,7 @@ host-to-host migration pair (which only covers queue jobs) — this covers
 every table the app considers data: printers, filament inventory
 (`filament_spools`/`filament_station_assignments`), queue jobs (including
 stored model file bytes), `app_settings` (branding, Home Assistant automation,
-SAML SSO config, staff users, admin credential — all key/value rows there),
+Keycloak SSO config, staff users, admin credential — all key/value rows there),
 slicer/API keys, audit logs, maintenance schedules/events/notifications, and
 network usage. Excluded: `schema_migrations` (app-managed) and
 `poller_health` (ephemeral). Both endpoints are **admin only** (cookie
@@ -1014,81 +1014,68 @@ curl -H "X-Api-Key: abc123..." http://printfarm.local/api/v1/printers
 ## SSO sign-in API (`/api/auth`)
 
 A **public** endpoint group (no API key) that runs the OAuth 2.0 Authorization
-Code flow for four providers — **`google`**, **`microsoft`** (Microsoft Entra ID /
-Azure AD), **`adfs`** (on-prem AD FS), and **`keycloak`** — plus **SAML 2.0** SSO
-against an external identity provider (the dashboard is the Service Provider). On
-a successful sign-in the callback / ACS establishes the **HttpOnly session cookie
-server-side** and `302`-redirects to the dashboard — **no auth token is placed in
-the URL** (an earlier design handed the browser a `?oauth_grant=<token>` param;
-that was removed because a token in the URL leaks into the browser network log,
-history, access logs, and `Referer` headers, where a captured copy could be
-replayed for a session). OAuth sign-ins are granted the read-only **`student`**
-role; SAML sign-ins take their role from the assertion (or keep the stored role of
-an existing staff account) — see the SAML section below.
+Code flow against **Keycloak** — the sole SSO provider (Google, Microsoft Entra
+ID, and ADFS were removed to keep sign-in to a single, self-hosted identity
+source). On a successful sign-in the callback establishes the **HttpOnly session
+cookie server-side** and `302`-redirects to the dashboard — **no auth token is
+placed in the URL** (an earlier design handed the browser a `?oauth_grant=<token>`
+param; that was removed because a token in the URL leaks into the browser network
+log, history, access logs, and `Referer` headers, where a captured copy could be
+replayed for a session). Keycloak sign-ins are granted the read-only **`student`**
+role.
 
-Configure each provider's client id/secret and optional allowed email domains in
-**Settings → Sign-in**; nothing is baked into the build. Google and Microsoft use
-their standard cloud endpoints (Microsoft optionally scoped to a **Tenant ID**).
-ADFS and Keycloak are self-hosted/on-prem OIDC IdPs whose endpoints are instead
-derived from an admin-set **authority** base URL — ADFS as
-`<authority>/oauth2/{authorize,token,logout}`, Keycloak (additionally realm-scoped)
-as `<authority>/realms/<realm>/protocol/openid-connect/{auth,token,logout}` — with
-every derived endpoint (plus the redirect URI) overridable when an IdP uses
-non-standard paths. Register `<origin>/api/auth/<provider>/callback` as a redirect
-URI with the provider (Google Cloud console / Azure app registration / ADFS
-relying-party / Keycloak client), except ADFS which uses the fixed
-`<origin>/api/auth/oauth2_redirect` path; the origin is the configured [SSO public
+Configure the client id/secret, Keycloak server URL, realm, and optional allowed
+email domains in **Settings → Sign-in**; nothing is baked into the build. The
+OIDC endpoints are derived as
+`<server URL>/realms/<realm>/protocol/openid-connect/{auth,token,logout}` — each
+overridable (along with the redirect URI) when an instance uses non-standard
+paths. Register `<origin>/api/auth/keycloak/callback` as the client's redirect URI
+in the Keycloak Admin Console; the origin is the configured [SSO public
 URL](#sso-public-url-apisettingssso-public-url) (Settings → Sign-in), else
 `APP_BASE_URL`, else derived from `X-Forwarded-Proto`/`Host`.
-
-Any number of providers may be enabled at once — the login page shows a button for
-each enabled provider.
 
 ### Endpoints
 
 #### `GET /api/auth/providers`
 
-Which providers are configured **and** enabled. Drives the login buttons.
+Whether Keycloak is configured **and** enabled. Drives the login button.
 **Public.** Never returns any secret.
 
-**Response `200`** (`saml` reflects whether SAML SSO is enabled + configured):
+**Response `200`:**
 
 ```json
-{ "google": true, "microsoft": false, "adfs": false, "keycloak": false, "saml": false }
+{ "keycloak": true, "keycloakLabel": "" }
 ```
 
 ---
 
-#### `GET /api/auth/:provider/config`
+#### `GET /api/auth/keycloak/config`
 
-Whether a single provider (`google`, `microsoft`, `adfs`, or `keycloak`) is
-configured **and** enabled. **Public.**
+Whether Keycloak is configured **and** enabled. **Public.**
 
 **Response `200`:** `{ "enabled": true }`
 
 ---
 
-#### `GET /api/auth/:provider/start`
+#### `GET /api/auth/keycloak/start`
 
-Begins the flow for `:provider`. **Public.** `302`-redirects the browser to that
-provider's consent screen (with `scope=openid email profile`, the derived
-`redirect_uri`, and a signed `state` carrying the provider). When the provider is
+Begins the flow. **Public.** `302`-redirects the browser to Keycloak's login page
+(with `scope=openid email profile`, the derived `redirect_uri`, a signed `state`,
+a `nonce`, and `prompt=login` to force a fresh login rather than silently reusing
+an existing Keycloak session on a shared kiosk). When Keycloak is
 disabled/unconfigured it redirects to `/login?oauth_error=not_configured`.
 
 ---
 
-#### `GET /api/auth/:provider/callback`
+#### `GET /api/auth/keycloak/callback`
 
-The provider redirects here with `?code=&state=`. **Public.** Verifies `state`
-(including that it was minted for this provider), exchanges the code at the
-provider's token endpoint (server-to-server with the client secret), requires an
-email (Google `email`; Microsoft/ADFS/Keycloak fall back to
-`preferred_username`/`upn`/`unique_name`) that is not explicitly unverified and (if
-configured) an allowed domain, then **establishes the session cookie**
+Keycloak redirects here with `?code=&state=`. **Public.** Verifies `state`,
+exchanges the code at the token endpoint (server-to-server with the client
+secret), requires an email (`email`, falling back to
+`preferred_username`/`upn`/`unique_name`) that is not explicitly unverified and
+(if configured) an allowed domain, then **establishes the session cookie**
 (`Set-Cookie: pf_session`, HttpOnly) and `302`-redirects to `/`. The user id is
-namespaced by provider (`google:<sub>` / `microsoft:<sub>` / `adfs:<sub>` /
-`keycloak:<sub>`) and the role is `student`. (ADFS actually lands on the fixed
-`/api/auth/oauth2_redirect` path rather than this route — see below.)
+`keycloak:<sub>` and the role is `student`.
 
 On any failure it `302`-redirects to `/login?oauth_error=<code>` where `<code>`
 is one of `not_configured`, `denied`, `exchange_failed`, `unverified_email`, or
@@ -1096,71 +1083,21 @@ is one of `not_configured`, `denied`, `exchange_failed`, `unverified_email`, or
 
 ---
 
+#### `GET /launch`
+
+**Public.** Friendly deep-link alias for the SSO portal — a one-click sign-in.
+`302`-redirects to `GET /api/auth/keycloak/start`. Intended as the `href` for a
+"Print Farm" button on an IdP portal page (`https://<this-host>/launch`). No body
+or query params.
+
+---
+
 #### `POST /api/auth/verify`
 
 **Deprecated / inert.** This endpoint verified the old `?oauth_grant=` hand-off
-token. The callback and SAML ACS now establish the session cookie directly and no
-longer mint a grant, so nothing produces a token for this endpoint to verify. It
-is retained only for backward compatibility and returns `401` in normal operation.
-
----
-
-### SAML 2.0 SSO endpoints
-
-The dashboard is the SAML **Service Provider**. Configure the IdP in **Settings →
-SSO Configuration** (`/api/settings/saml`). The AuthnRequest uses the
-**HTTP-Redirect** binding (DEFLATE + base64); the IdP returns the response via the
-**HTTP-POST** binding to the ACS. The assertion's enveloped XML signature is
-verified against the stored IdP certificate (the cert embedded in the assertion is
-ignored), the audience must match the SP entity ID, the recipient must match the
-ACS URL, the validity window is enforced, and `InResponseTo` must match the
-AuthnRequest id (carried in a signed `RelayState`).
-
-#### `GET /api/auth/saml/metadata`
-
-**Public.** Returns the SP metadata XML (`application/samlmetadata+xml`) generated
-from the saved SP entity ID + ACS URL (falling back to the resolved public origin
-— see [SSO public URL](#sso-public-url-apisettingssso-public-url) — when left
-blank). Import this into the IdP to register the dashboard as an SP.
-
----
-
-#### `GET /api/auth/saml/start`
-
-**Public.** Begins SAML sign-in: `302`-redirects the browser to the IdP SSO URL
-with a DEFLATE+base64 `SAMLRequest` and a signed `RelayState`. Redirects to
-`/login?oauth_error=not_configured` when SAML is disabled/unconfigured.
-
----
-
-#### `GET /launch`
-
-**Public.** Friendly deep-link alias for the SSO portal — a one-click,
-SP-initiated SAML sign-in. `302`-redirects to `GET /api/auth/saml/start`, which
-takes the browser through the IdP and lands the signed-in user on the dashboard.
-Intended as the `href` for a "Print Farm" button on the IdP portal page
-(`https://<this-host>/launch`). No body or query params.
-
----
-
-#### `POST /api/auth/saml/acs`
-
-**Public.** The Assertion Consumer Service. The IdP posts
-`application/x-www-form-urlencoded` with `SAMLResponse` (base64 XML) and
-`RelayState`. Verifies the assertion, then resolves the user:
-
-- **Existing staff account** (matched by username = asserted email): admitted with
-  its **stored** role (the assertion cannot escalate it).
-- **Unknown user + Auto Provision Users on:** admitted with the asserted `role`
-  (validated to `admin`/`operator`/`viewer`/`student`; anything else →
-  `student`).
-- **Unknown user + Auto Provision Users off:** rejected with
-  `/login?oauth_error=saml_not_provisioned`.
-
-On success **establishes the session cookie** (`Set-Cookie: pf_session`, HttpOnly;
-user id `saml:<email>`) and `302`-redirects to `/` — no token in the URL. On a
-verification failure redirects to `/login?oauth_error=saml_invalid` (or
-`not_configured`/`denied`).
+token. The callback now establishes the session cookie directly and no longer
+mints a grant, so nothing produces a token for this endpoint to verify. It is
+retained only for backward compatibility and returns `401` in normal operation.
 
 ## Website access mode (`/api/settings/public-viewer`)
 
@@ -1284,8 +1221,8 @@ returns **`429`** with a `Retry-After` header, checked before the window check.
 ## SSO public URL (`/api/settings/sso-public-url`)
 
 Admin override for the site's own public origin, used as the top-priority tier
-when the server builds OAuth `redirect_uri` / SAML `spEntityId`+`acsUrl` (see the
-OAuth and SAML sign-in sections). Resolution order: **(1)** this setting, stored
+when the server builds the OAuth `redirect_uri` (see the SSO sign-in section
+above). Resolution order: **(1)** this setting, stored
 in `app_settings` under `sso_public_url` → **(2)** the `APP_BASE_URL` env var →
 **(3)** the `X-Forwarded-Proto`/`X-Forwarded-Host`/`Host` request headers. Set
 it when SSO logins land on the wrong host because the reverse proxy doesn't
@@ -1430,38 +1367,20 @@ updated rule. `404` if the id is unknown.
 
 Deletes a rule. **Response `204`**; `404` if the id is unknown.
 
-## Sign-in settings (`/api/settings/oauth/:provider`)
+## Sign-in settings (`/api/settings/oauth/keycloak`)
 
 Admin-only in the UI (client-side session guard, like
-`/api/settings/integrations`). Stores each provider's OAuth config in
-`app_settings` (`:provider` is `google`, `microsoft`, `adfs`, or `keycloak`).
-`tenant` is Microsoft-only; `authority` is Microsoft/ADFS/Keycloak; `realm` is
-Keycloak-only. All fields are accepted for any provider but ignored where unused.
+`/api/settings/integrations`). Stores the Keycloak OAuth config in `app_settings`.
+Both `authority` (the Keycloak server base URL, e.g.
+`https://keycloak.example.com`) and `realm` are **required** — the provider is not
+considered configured without them, since the OIDC endpoints are derived as
+`<authority>/realms/<realm>/protocol/openid-connect/{auth,token,logout}`.
+`authorizeEndpoint`/`tokenEndpoint`/`logoutEndpoint` may each be overridden
+explicitly when an instance uses non-standard paths. Register
+`<origin>/api/auth/keycloak/callback` as the redirect URI in the Keycloak Admin
+Console (realm → Clients).
 
-For Microsoft, two modes are supported:
-- **Cloud (Entra ID):** leave `authority` blank and set `tenant` (a directory GUID,
-  or `common`). Endpoints are `https://login.microsoftonline.com/<tenant>/oauth2/v2.0/*`.
-- **On-prem AD FS:** set `authority` to the AD FS base URL (the `/adfs` deep link,
-  e.g. `https://sso.example.com/adfs`). Endpoints become `<authority>/oauth2/authorize`
-  and `<authority>/oauth2/token`. `authority` takes precedence over `tenant`.
-
-For `adfs`, `authority` is **required** (unlike Microsoft where it is optional) —
-the provider is not considered configured without it, since all endpoints are
-derived as `<authority>/oauth2/{authorize,token}`. `tenant` is ignored. The
-registered callback path is `/api/auth/oauth2_redirect` (not the default
-`/api/auth/adfs/callback` pattern). All config is stored in the database via
-Settings → Sign-in → ADFS.
-
-For `keycloak`, both `authority` (the Keycloak server base URL, e.g.
-`https://keycloak.example.com`) and `realm` are **required** — endpoints are
-derived as `<authority>/realms/<realm>/protocol/openid-connect/{auth,token,logout}`.
-Unlike ADFS, Keycloak uses the standard per-provider callback path
-(`/api/auth/keycloak/callback`), so nothing extra needs registering beyond that
-redirect URI and the client credentials from Keycloak's Admin Console (realm →
-Clients). As with ADFS, `authorizeEndpoint`/`tokenEndpoint`/`logoutEndpoint` may
-each be overridden explicitly when an instance uses non-standard paths.
-
-#### `GET /api/settings/oauth/:provider`
+#### `GET /api/settings/oauth/keycloak`
 
 **Response `200`** — the client secret is **never** returned, only whether one
 is stored:
@@ -1470,15 +1389,14 @@ is stored:
 {
   "enabled": true,
   "clientId": "xxxx",
-  "tenant": "00000000-0000-0000-0000-000000000000",
-  "authority": "",
-  "realm": "",
+  "authority": "https://keycloak.example.com",
+  "realm": "printfarm",
   "allowedDomains": ["school.edu"],
   "hasClientSecret": true
 }
 ```
 
-#### `PUT /api/settings/oauth/:provider`
+#### `PUT /api/settings/oauth/keycloak`
 
 **Request body:**
 
@@ -1487,9 +1405,8 @@ is stored:
   "enabled": true,
   "clientId": "xxxx",
   "clientSecret": "secret-value",
-  "tenant": "00000000-0000-0000-0000-000000000000",
-  "authority": "https://sso.example.com/adfs",
-  "realm": "",
+  "authority": "https://keycloak.example.com",
+  "realm": "printfarm",
   "allowedDomains": ["school.edu"]
 }
 ```
@@ -1497,88 +1414,6 @@ is stored:
 A blank/omitted `clientSecret` **keeps** the stored one (so the form can
 round-trip without re-entering it); a non-empty value replaces it. Returns the
 same redacted shape as `GET`.
-
-**SSO providers are independent:** Google, Microsoft/AD FS, Keycloak, and SAML can
-each be enabled at the same time. Saving one provider no longer disables the
-others — the login screen shows one sign-in button per enabled provider.
-
-## SSO configuration (`/api/settings/saml`)
-
-Admin-only in the UI (client-side session guard, like `/api/settings/oauth`).
-Stores the SAML SSO config in `app_settings` (`saml_sso`) and applies it on the
-next sign-in with no restart. The IdP certificate is a **public** signing cert, so
-it is returned in full (unlike the OAuth client secret).
-
-#### `GET /api/settings/saml`
-
-**Response `200`:**
-
-```json
-{
-  "enabled": false,
-  "idpEntityId": "https://idp.example.com",
-  "idpSsoUrl": "https://idp.example.com/adfs/ls/",
-  "idpCertificate": "-----BEGIN CERTIFICATE-----\n...",
-  "spEntityId": "",
-  "acsUrl": "",
-  "autoProvisionUsers": false,
-  "updatedAt": "2026-06-18T00:00:00.000Z",
-  "defaultSpEntityId": "https://<origin>/api/auth/saml/metadata",
-  "defaultAcsUrl": "https://<origin>/api/auth/saml/acs",
-  "effectiveSpEntityId": "https://<origin>/api/auth/saml/metadata",
-  "effectiveAcsUrl": "https://<origin>/api/auth/saml/acs"
-}
-```
-
-`spEntityId`/`acsUrl` fall back to the origin-derived `default*` values (which the
-metadata endpoint advertises) when left blank; `effective*` is the resolved value.
-
-#### `PUT /api/settings/saml`
-
-**Request body:**
-
-```json
-{
-  "enabled": true,
-  "idpEntityId": "https://idp.example.com",
-  "idpSsoUrl": "https://idp.example.com/adfs/ls/",
-  "idpCertificate": "-----BEGIN CERTIFICATE-----\n...",
-  "spEntityId": "",
-  "acsUrl": "",
-  "autoProvisionUsers": false
-}
-```
-
-Validates before saving: any provided URL must be absolute http(s) (`400`
-otherwise); the certificate, if provided, must be a valid X.509 PEM (`400`
-otherwise); enabling requires both an IdP SSO URL and certificate (`400`
-otherwise). Stamps `updatedAt`, writes an audit log, and — when enabling —
-disables the OAuth providers. Returns the same shape as `GET`.
-
-#### `POST /api/settings/saml/test`
-
-Validates the submitted (or, where blank, stored) `idpSsoUrl` + `idpCertificate`
-and probes the IdP SSO URL for reachability (5 s timeout; any HTTP response counts
-as reachable). Does **not** save.
-
-**Request body** (optional — falls back to stored values):
-
-```json
-{ "idpSsoUrl": "https://idp.example.com/adfs/ls/", "idpCertificate": "-----BEGIN CERTIFICATE-----\n..." }
-```
-
-**Response `200`:**
-
-```json
-{
-  "ok": true,
-  "checks": [
-    { "label": "IdP SSO URL is a valid http(s) URL", "ok": true },
-    { "label": "IdP certificate is a valid X.509 certificate", "ok": true },
-    { "label": "IdP SSO URL is reachable", "ok": true, "detail": "HTTP 200" }
-  ]
-}
-```
 
 ## Operational endpoints
 

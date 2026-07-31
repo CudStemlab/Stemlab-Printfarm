@@ -149,14 +149,6 @@ import {
   verifyState,
 } from './oauthGrant.js';
 import {
-  buildAuthnRequest,
-  buildSpMetadata,
-  isValidCertificate,
-  isValidHttpUrl,
-  parseAndVerifySamlResponse,
-  SamlError,
-} from './samlSp.js';
-import {
   addCameraViewer,
   getAllCameraHealth,
   getCameraHealth,
@@ -621,75 +613,25 @@ function isValidIanaTimezone(timezone) {
   }
 }
 
-// OAuth (SSO) sign-in config. Two providers are supported — Google and Microsoft
-// Entra ID (Azure AD) — and each is configured independently in Settings →
-// Sign-in (client id/secret, optional allowed-email-domain list, and, for
-// Microsoft, the directory tenant). Config is persisted per provider in
-// app_settings. Anyone who authenticates this way is granted the read-only
-// `student` role. The clientSecret is never returned by a read path — only
-// whether one is configured.
+// OAuth (SSO) sign-in config. Keycloak is the sole supported provider (Google,
+// Microsoft/Entra ID, and ADFS were removed — this used to be a multi-provider
+// registry; kept as a single-entry object rather than inlining its fields so
+// adding a provider back stays a small diff). Configured in Settings →
+// Sign-in (client id/secret, optional allowed-email-domain list, authority +
+// realm). Config is persisted in app_settings. Anyone who authenticates this
+// way is granted the read-only `student` role. The clientSecret is never
+// returned by a read path — only whether one is configured.
 //
-// Both providers speak OAuth 2.0 Authorization Code + OIDC, so they differ only
-// in their authorize/token endpoints (Microsoft's are tenant-scoped) and in which
-// id_token claim carries the email (Google: `email`; Microsoft often only
-// `preferred_username`/`upn`). The registry below captures those differences.
+// Keycloak speaks OAuth 2.0 Authorization Code + OIDC, scoping every endpoint
+// under a realm: <authority>/realms/<realm>/protocol/openid-connect/*. Both
+// `authority` (the Keycloak server base URL, e.g. https://keycloak.example.com)
+// and `realm` are required — the provider is not considered configured without
+// them. Each derived endpoint may be overridden explicitly when an instance
+// uses non-standard paths.
 const OAUTH_PROVIDERS = {
-  google: {
-    settingsKey: 'oauth_google',
-    label: 'Google',
-    usesTenant: false,
-    authorizeEndpoint: () => 'https://accounts.google.com/o/oauth2/v2/auth',
-    tokenEndpoint: () => 'https://oauth2.googleapis.com/token',
-  },
-  microsoft: {
-    settingsKey: 'oauth_microsoft',
-    label: 'Microsoft',
-    usesTenant: true,
-    // Two modes. With an `authority` set (on-prem AD FS, e.g.
-    // https://sso.example.com/adfs) the OIDC endpoints are <authority>/oauth2/*.
-    // Otherwise fall back to Microsoft cloud (Entra ID), which is tenant-scoped.
-    authorizeEndpoint: (config) =>
-      config.authority
-        ? `${config.authority.replace(/\/+$/, '')}/oauth2/authorize`
-        : `https://login.microsoftonline.com/${encodeURIComponent(
-            config.tenant || 'common',
-          )}/oauth2/v2.0/authorize`,
-    tokenEndpoint: (config) =>
-      config.authority
-        ? `${config.authority.replace(/\/+$/, '')}/oauth2/token`
-        : `https://login.microsoftonline.com/${encodeURIComponent(
-            config.tenant || 'common',
-          )}/oauth2/v2.0/token`,
-  },
-  // ADFS — endpoints are derived from the `authority` base URL configured in
-  // Settings → Sign-in. `authority` is required; the provider is not considered
-  // configured without it. The redirect_uri is the fixed path
-  // /api/auth/oauth2_redirect as registered with the IdP.
-  adfs: {
-    settingsKey: 'oauth_adfs',
-    label: 'ADFS',
-    usesTenant: false,
-    requiresAuthority: true,
-    authorizeEndpoint: (config) =>
-      config.authorizeEndpoint || `${config.authority.replace(/\/+$/, '')}/oauth2/authorize`,
-    tokenEndpoint: (config) =>
-      config.tokenEndpoint || `${config.authority.replace(/\/+$/, '')}/oauth2/token`,
-    logoutEndpoint: (config) =>
-      config.logoutEndpoint || `${config.authority.replace(/\/+$/, '')}/oauth2/logout`,
-    callbackPath: '/api/auth/oauth2_redirect',
-  },
-  // Keycloak — like ADFS, an on-prem/self-hosted OIDC IdP whose endpoints are
-  // derived from an admin-set base URL, but Keycloak additionally scopes every
-  // OIDC endpoint under a realm: <authority>/realms/<realm>/protocol/openid-connect/*.
-  // `authority` (the Keycloak server base URL, e.g. https://keycloak.example.com)
-  // and `realm` are both required; the callback uses the standard per-provider
-  // path (no fixed registered path like ADFS needs).
   keycloak: {
     settingsKey: 'oauth_keycloak',
     label: 'Keycloak',
-    usesTenant: false,
-    requiresAuthority: true,
-    requiresRealm: true,
     authorizeEndpoint: (config) =>
       config.authorizeEndpoint ||
       `${config.authority.replace(/\/+$/, '')}/realms/${encodeURIComponent(config.realm)}/protocol/openid-connect/auth`,
@@ -733,52 +675,39 @@ async function getOAuthConfig(providerName) {
     enabled,
     clientId,
     clientSecret,
-    tenant: typeof stored.tenant === 'string' ? stored.tenant.trim() : '',
-    // On-prem AD FS authority base (e.g. https://host/adfs); blank = use cloud.
+    // Keycloak server base URL, combined with `realm` to derive the OIDC endpoints.
     authority: typeof stored.authority === 'string' ? stored.authority.trim() : '',
-    // Keycloak: the realm name, used with `authority` to derive the OIDC endpoints.
     realm: typeof stored.realm === 'string' ? stored.realm.trim() : '',
     allowedDomains,
     // Custom label shown on the login-page sign-in button (e.g. "Sign in with Satit-M").
     // Falls back to the provider's built-in label when blank.
     displayName: typeof stored.displayName === 'string' ? stored.displayName.trim() : '',
-    // ADFS: the full redirect_uri pre-registered with the IdP. When set, used
-    // verbatim instead of computing it from request headers (which breaks behind
-    // a TLS-terminating proxy that doesn't forward X-Forwarded-Proto/Host).
+    // The full redirect_uri pre-registered with the IdP. When set, used verbatim
+    // instead of computing it from request headers (which breaks behind a
+    // TLS-terminating proxy that doesn't forward X-Forwarded-Proto/Host).
     redirectUri: typeof stored.redirectUri === 'string' ? stored.redirectUri.trim() : '',
     authorizeEndpoint: typeof stored.authorizeEndpoint === 'string' ? stored.authorizeEndpoint.trim() : '',
     tokenEndpoint: typeof stored.tokenEndpoint === 'string' ? stored.tokenEndpoint.trim() : '',
     logoutEndpoint: typeof stored.logoutEndpoint === 'string' ? stored.logoutEndpoint.trim() : '',
     metadataUrl: typeof stored.metadataUrl === 'string' ? stored.metadataUrl.trim() : '',
     jwksUri: typeof stored.jwksUri === 'string' ? stored.jwksUri.trim() : '',
-    relyingPartyId: typeof stored.relyingPartyId === 'string' ? stored.relyingPartyId.trim() : '',
   };
 }
 
-// True only when the flow can actually run: enabled + credentials + any
-// provider-specific required fields (Microsoft needs tenant or authority; ADFS
-// needs authority since its endpoints are derived from it; Keycloak needs both
-// authority and realm).
+// True only when the flow can actually run: enabled + credentials + authority + realm.
 function isOAuthConfigured(config) {
   if (!config || !config.enabled || !config.clientId || !config.clientSecret) {
     return false;
   }
-  const provider = getOAuthProvider(config.provider);
-  if (provider?.usesTenant && !config.tenant && !config.authority) {
-    return false;
-  }
-  if (provider?.requiresAuthority && !config.authority) {
-    return false;
-  }
-  if (provider?.requiresRealm && !config.realm) {
+  if (!config.authority || !config.realm) {
     return false;
   }
   return true;
 }
 
-// Pull the user's email out of the id_token claims. Google always populates
-// `email`; Microsoft Entra ID commonly omits it and carries the address in
-// `preferred_username` (or `upn`), so fall back across all three.
+// Pull the user's email out of the id_token claims. Keycloak populates `email`
+// by default; fall back across other common claims in case an instance is
+// configured to omit it.
 function oauthClaimEmail(claims) {
   if (!claims) {
     return '';
@@ -827,7 +756,7 @@ function normalizePrinterCallbackUrl(raw) {
 }
 
 // Strip a trailing slash so callers can safely append a path (e.g.
-// "/api/auth/saml/acs"). Does not validate scheme — the PUT handler does that.
+// "/api/auth/keycloak/callback"). Does not validate scheme — the PUT handler does that.
 function normalizeSsoPublicUrl(raw) {
   const base = String(raw || '').trim();
   return base ? base.replace(/\/+$/, '') : '';
@@ -838,8 +767,8 @@ async function getSsoPublicUrl() {
   return normalizeSsoPublicUrl(stored?.publicUrl);
 }
 
-// The public origin used to build OAuth redirect_uri / SAML ACS URLs, resolved in
-// priority order: (1) the admin-set Settings → Sign-in value, (2) the APP_BASE_URL
+// The public origin used to build the OAuth redirect_uri, resolved in priority
+// order: (1) the admin-set Settings → Sign-in value, (2) the APP_BASE_URL
 // env var, (3) the request headers (X-Forwarded-Proto/-Host, Host) — which only
 // work correctly when the reverse proxy forwards them. The redirect_uri must match
 // this exactly and be registered with the provider (Google Cloud console / Azure
@@ -858,17 +787,16 @@ async function resolvePublicOrigin(req) {
 
 async function oauthRedirectUri(req, providerName, config = null) {
   // Use the stored redirect URI when set — avoids relying on proxy headers to
-  // reconstruct the origin (required for ADFS whose URI is pre-registered).
+  // reconstruct the origin (useful behind a proxy that doesn't forward them,
+  // or when the IdP has a pre-registered exact URI on file).
   if (config?.redirectUri) return config.redirectUri;
-  const provider = getOAuthProvider(providerName);
-  const path = provider?.callbackPath ?? `/api/auth/${providerName}/callback`;
-  return `${await resolvePublicOrigin(req)}${path}`;
+  return `${await resolvePublicOrigin(req)}/api/auth/${providerName}/callback`;
 }
 
 // Establish a real server session for an SSO-authenticated identity and bounce
-// the browser to the dashboard. Both the OAuth callback and the SAML ACS call
-// this once the provider's assertion is verified and the final role resolved.
-// Setting the HttpOnly session cookie server-side here — instead of handing the
+// the browser to the dashboard. The OAuth callback calls this once the
+// provider's token exchange is verified and the role resolved. Setting the
+// HttpOnly session cookie server-side here — instead of handing the
 // browser a signed grant as `?oauth_grant=<token>` for it to exchange — keeps the
 // auth token out of the URL, and therefore out of the DevTools network log,
 // browser history, access logs, and Referer headers. That closes a replay window:
@@ -896,9 +824,8 @@ async function establishSsoSession(req, res, { provider, sub, email, name, role 
   sendRedirect(res, '/');
 }
 
-// Shared Authorization Code exchange + identity extraction. Used by both the
-// standard /api/auth/:provider/callback routes and the fixed
-// /api/auth/oauth2_redirect path registered for ADFS.
+// Authorization Code exchange + identity extraction for the
+// /api/auth/:provider/callback route.
 async function oauthExchangeCallback(req, res, requestUrl, providerName) {
   const provider = OAUTH_PROVIDERS[providerName];
   const config = await getOAuthConfig(providerName);
@@ -937,8 +864,8 @@ async function oauthExchangeCallback(req, res, requestUrl, providerName) {
     // the signature; we only need the identity fields out of the payload.
     const claims = decodeJwtClaims(tokens.id_token);
     const email = oauthClaimEmail(claims);
-    // Google sets email_verified; Microsoft / ADFS omit it (institutional accounts
-    // are verified at directory level), so only reject when explicitly false.
+    // Keycloak sets email_verified when the realm tracks it; some setups omit
+    // it entirely, so only reject when explicitly false.
     if (!email || claims?.email_verified === false) {
       sendRedirect(res, '/login?oauth_error=unverified_email');
       return;
@@ -960,61 +887,6 @@ async function oauthExchangeCallback(req, res, requestUrl, providerName) {
   } catch {
     sendRedirect(res, '/login?oauth_error=exchange_failed');
   }
-}
-
-// SAML 2.0 SSO (the dashboard is the Service Provider). Like OAuth, config lives
-// in app_settings and is read fresh on every request, so an admin can change it
-// in Settings → SSO Configuration with no restart. On a valid assertion the ACS
-// establishes the server session directly (establishSsoSession) and redirects to
-// the dashboard — no auth token is placed in the URL.
-const SAML_SETTINGS_KEY = 'saml_sso';
-// Roles an asserted `role` attribute may map onto; anything else falls back to
-// the read-only `student` role (matching the OAuth default).
-const SAML_ALLOWED_ROLES = new Set(['admin', 'operator', 'viewer', 'student']);
-const SAML_DEFAULT_ROLE = 'student';
-
-// Default SP identifiers derived from the public origin when an admin leaves the
-// fields blank. These are also what the metadata endpoint advertises.
-async function defaultSamlSpEntityId(req) {
-  return `${await resolvePublicOrigin(req)}/api/auth/saml/metadata`;
-}
-async function defaultSamlAcsUrl(req) {
-  return `${await resolvePublicOrigin(req)}/api/auth/saml/acs`;
-}
-
-async function getSamlConfig() {
-  const stored = (await getAppSetting(SAML_SETTINGS_KEY)) || {};
-  return {
-    enabled: stored.enabled === true,
-    idpEntityId: typeof stored.idpEntityId === 'string' ? stored.idpEntityId.trim() : '',
-    idpSsoUrl: typeof stored.idpSsoUrl === 'string' ? stored.idpSsoUrl.trim() : '',
-    idpCertificate: typeof stored.idpCertificate === 'string' ? stored.idpCertificate.trim() : '',
-    spEntityId: typeof stored.spEntityId === 'string' ? stored.spEntityId.trim() : '',
-    acsUrl: typeof stored.acsUrl === 'string' ? stored.acsUrl.trim() : '',
-    autoProvisionUsers: stored.autoProvisionUsers === true,
-    updatedAt: typeof stored.updatedAt === 'string' ? stored.updatedAt : null,
-    displayName: typeof stored.displayName === 'string' ? stored.displayName.trim() : '',
-  };
-}
-
-// True only when the flow can actually run: enabled, with an IdP SSO URL and a
-// signing certificate to verify assertions against.
-function isSamlConfigured(config) {
-  return Boolean(config && config.enabled && config.idpSsoUrl && config.idpCertificate);
-}
-
-// Resolve the effective SP entity id / ACS URL, falling back to the request
-// origin when an admin left them blank.
-async function resolveSamlEndpoints(config, req) {
-  return {
-    spEntityId: config.spEntityId || (await defaultSamlSpEntityId(req)),
-    acsUrl: config.acsUrl || (await defaultSamlAcsUrl(req)),
-  };
-}
-
-// Map an asserted role onto an allowed dashboard role; unknown/blank → student.
-function normalizeSamlRole(role) {
-  return SAML_ALLOWED_ROLES.has(role) ? role : SAML_DEFAULT_ROLE;
 }
 
 // Send a 302 to a path/URL on the dashboard (or the provider). Used by the OAuth
@@ -1675,7 +1547,7 @@ function readSessionToken(req) {
 
 function buildSessionCookie(req, value, maxAgeSeconds, name = sessionCookieName(req)) {
   // SameSite=Lax (not Strict) so the cookie survives the top-level redirect back
-  // from an OAuth/SAML IdP, while still blocking cross-site POST CSRF.
+  // from the OAuth IdP, while still blocking cross-site POST CSRF.
   const attrs = [
     `${name}=${value}`,
     'Path=/',
@@ -2214,10 +2086,9 @@ async function authorizeFrontendApi(req, res, requestUrl) {
   // already keeps the session cookie off cross-site writes; this is a second,
   // independent control — a state-changing request must originate from our own
   // site. Only non-public mutations reach here (the public intake endpoints —
-  // login, SAML ACS, manager request, queue submit — resolve to PUBLIC above,
-  // so the IdP's cross-origin ACS POST and the CORS manager API are unaffected).
-  // GET/HEAD are exempt (not state-changing). The key-gated /api/v1 surface is
-  // separate and never reaches this gate.
+  // login, manager request, queue submit — resolve to PUBLIC above, so the
+  // CORS manager API is unaffected). GET/HEAD are exempt (not state-changing).
+  // The key-gated /api/v1 surface is separate and never reaches this gate.
   const method = (req.method || 'GET').toUpperCase();
   if (method !== 'GET' && method !== 'HEAD' && !isSameOriginWrite(req)) {
     sendJson(res, 403, { error: 'Cross-origin request blocked.' });
@@ -4662,175 +4533,35 @@ async function handleApi(req, res, requestUrl) {
     return true;
   }
 
-  // OAuth (SSO) sign-in — Google and Microsoft Entra ID. On a successful
-  // Authorization Code exchange the callback establishes the HttpOnly session
-  // cookie server-side (establishSsoSession) and 302s to the dashboard — the auth
-  // token is never placed in the URL. The provider rides in the path on
-  // start/callback.
-  //   GET  /api/auth/providers          → { google, microsoft } : which buttons
+  // OAuth (SSO) sign-in — Keycloak only. On a successful Authorization Code
+  // exchange the callback establishes the HttpOnly session cookie server-side
+  // (establishSsoSession) and 302s to the dashboard — the auth token is never
+  // placed in the URL. The provider rides in the path on start/callback (kept
+  // as a path segment rather than hardcoding "keycloak" so a provider can be
+  // added back without reshaping these routes).
+  //   GET  /api/auth/providers          → { keycloak }          : which buttons
   //   GET  /api/auth/:provider/config   → { enabled }           : single provider
   //   GET  /api/auth/:provider/start    → 302 to the provider's consent screen
   //   GET  /api/auth/:provider/callback → exchange code, set session cookie, 302 to /
   if (requestUrl.pathname === '/api/auth/providers' && req.method === 'GET') {
-    const [google, microsoft, adfs, keycloak, saml] = await Promise.all([
-      getOAuthConfig('google'),
-      getOAuthConfig('microsoft'),
-      getOAuthConfig('adfs'),
-      getOAuthConfig('keycloak'),
-      getSamlConfig(),
-    ]);
+    const keycloak = await getOAuthConfig('keycloak');
     sendJson(res, 200, {
-      google: isOAuthConfigured(google),
-      microsoft: isOAuthConfigured(microsoft),
-      adfs: isOAuthConfigured(adfs),
       keycloak: isOAuthConfigured(keycloak),
-      saml: isSamlConfigured(saml),
-      googleLabel: google?.displayName || '',
-      microsoftLabel: microsoft?.displayName || '',
-      adfsLabel: adfs?.displayName || '',
       keycloakLabel: keycloak?.displayName || '',
-      samlLabel: saml?.displayName || '',
     });
     return true;
   }
 
-  // SAML 2.0 SSO endpoints (the dashboard is the SP).
-  //   GET  /api/auth/saml/metadata → SP metadata XML (public, for IdP setup)
-  //   GET  /api/auth/saml/start    → 302 to the IdP carrying a deflate AuthnRequest
-  //   POST /api/auth/saml/acs      → consume the IdP's signed SAMLResponse (POST binding)
-  if (requestUrl.pathname === '/api/auth/saml/metadata' && req.method === 'GET') {
-    const config = await getSamlConfig();
-    const { spEntityId, acsUrl } = await resolveSamlEndpoints(config, req);
-    const xml = buildSpMetadata({ spEntityId, acsUrl });
-    res.statusCode = 200;
-    res.setHeader('Content-Type', 'application/samlmetadata+xml; charset=utf-8');
-    res.setHeader('Content-Disposition', 'inline; filename="sp-metadata.xml"');
-    res.setHeader('Cache-Control', 'no-store');
-    res.end(xml);
-    return true;
-  }
-
-  // Friendly deep-link alias for the SSO portal. Put a "Print Farm" button on the
-  // IdP portal page pointing at https://<this-host>/launch; clicking it kicks off
-  // the SP-initiated SAML login (→ IdP → ACS) and lands the signed-in user on the
-  // dashboard. It is a thin 302 to the canonical SAML start so there is a single
-  // source of truth for the flow.
+  // Friendly deep-link alias for the SSO portal. Put a "Print Farm" button on
+  // an IdP portal page pointing at https://<this-host>/launch; clicking it
+  // kicks off sign-in and lands on the dashboard.
   if (requestUrl.pathname === '/launch' && req.method === 'GET') {
-    sendRedirect(res, '/api/auth/saml/start');
-    return true;
-  }
-
-  if (requestUrl.pathname === '/api/auth/saml/start' && req.method === 'GET') {
-    const config = await getSamlConfig();
-    if (!isSamlConfigured(config)) {
-      sendRedirect(res, '/login?oauth_error=not_configured');
-      return true;
-    }
-    const { spEntityId, acsUrl } = await resolveSamlEndpoints(config, req);
-    const secret = await getOAuthSigningSecret();
-    // Build the request first so its id can be bound into the signed RelayState;
-    // the ACS then enforces InResponseTo against it (CSRF / unsolicited-response
-    // protection on top of the assertion signature).
-    const { url, requestId } = buildAuthnRequest({
-      spEntityId,
-      acsUrl,
-      idpSsoUrl: config.idpSsoUrl,
-      relayState: '',
-    });
-    const relayState = signState(secret, { n: requestId, p: 'saml' });
-    const redirectUrl = new URL(url);
-    redirectUrl.searchParams.set('RelayState', relayState);
-    sendRedirect(res, redirectUrl.toString());
-    return true;
-  }
-
-  if (requestUrl.pathname === '/api/auth/saml/acs' && req.method === 'POST') {
-    const config = await getSamlConfig();
-    if (!isSamlConfigured(config)) {
-      sendRedirect(res, '/login?oauth_error=not_configured');
-      return true;
-    }
-    const { spEntityId, acsUrl } = await resolveSamlEndpoints(config, req);
-    const secret = await getOAuthSigningSecret();
-
-    // The IdP POSTs an auto-submit form (application/x-www-form-urlencoded).
-    let form;
-    try {
-      const body = await readBody(req);
-      form = new URLSearchParams(body.toString('utf8'));
-    } catch {
-      sendRedirect(res, '/login?oauth_error=denied');
-      return true;
-    }
-    const samlResponseB64 = form.get('SAMLResponse') || '';
-    const relayState = form.get('RelayState') || '';
-    // RelayState is our own signed token; recover the AuthnRequest id we issued.
-    const relayData = verifyState(secret, relayState);
-    const expectedInResponseTo = relayData && relayData.p === 'saml' ? relayData.n : null;
-
-    let identity;
-    try {
-      identity = parseAndVerifySamlResponse({
-        samlResponseB64,
-        idpCertificate: config.idpCertificate,
-        spEntityId,
-        acsUrl,
-        expectedInResponseTo,
-      });
-    } catch (error) {
-      if (!(error instanceof SamlError)) {
-        throw error;
-      }
-      sendRedirect(res, '/login?oauth_error=saml_invalid');
-      return true;
-    }
-
-    // Auto-provision gate. When off, only users already in the staff list may
-    // sign in, and they keep their assigned role (the assertion can't escalate);
-    // a known account always keeps its stored role regardless. When on, an
-    // unknown user is admitted with the (validated) role the assertion carries.
-    const staffUsers = await readStaffUsers();
-    const existing = staffUsers.find(
-      (account) =>
-        typeof account.username === 'string' &&
-        account.username.toLowerCase() === identity.email.toLowerCase(),
-    );
-    if (!existing && !config.autoProvisionUsers) {
-      sendRedirect(res, '/login?oauth_error=saml_not_provisioned');
-      return true;
-    }
-    const role = existing && USER_ROLES.has(existing.role)
-      ? existing.role
-      : normalizeSamlRole(identity.role);
-
-    await establishSsoSession(req, res, {
-      provider: 'saml',
-      sub: identity.email,
-      email: identity.email,
-      name: identity.name || identity.email,
-      role,
-    });
-    return true;
-  }
-
-  // ADFS callback lands on the fixed registered path /api/auth/oauth2_redirect.
-  // response_mode=form_post → ADFS POSTs code+state in the body; fall back to
-  // GET query params for any non-form_post configuration.
-  if (requestUrl.pathname === '/api/auth/oauth2_redirect' &&
-      (req.method === 'GET' || req.method === 'POST')) {
-    let callbackUrl = requestUrl;
-    if (req.method === 'POST') {
-      const body = await readBody(req);
-      const params = new URLSearchParams(body);
-      callbackUrl = new URL(requestUrl.toString());
-      for (const [k, v] of params) callbackUrl.searchParams.set(k, v);
-    }
-    await oauthExchangeCallback(req, res, callbackUrl, 'adfs');
+    sendRedirect(res, '/api/auth/keycloak/start');
     return true;
   }
 
   const ssoMatch = requestUrl.pathname.match(
-    /^\/api\/auth\/(google|microsoft|adfs|keycloak)\/(config|start|callback)$/,
+    /^\/api\/auth\/(keycloak)\/(config|start|callback)$/,
   );
   if (ssoMatch && req.method === 'GET') {
     const providerName = ssoMatch[1];
@@ -4858,29 +4589,14 @@ async function handleApi(req, res, requestUrl) {
       authorizeUrl.searchParams.set('response_type', 'code');
       authorizeUrl.searchParams.set('scope', OAUTH_SCOPE);
       authorizeUrl.searchParams.set('state', state);
-      // ADFS requires a nonce for OpenID Connect flows; without it ADFS loses
-      // session state and redirects to /adfs/ls?error=state instead of our callback.
-      if (providerName === 'adfs' || config.authority) {
-        authorizeUrl.searchParams.set('nonce', nonce);
-      }
-      // form_post: ADFS POSTs code+state from its own HTML page directly to our
-      // redirect_uri — avoids ADFS constructing a GET redirect using its internal
-      // IP instead of the public hostname, which caused /adfs/ls?error=state.
-      if (providerName === 'adfs') {
-        authorizeUrl.searchParams.set('response_mode', 'form_post');
-      }
+      authorizeUrl.searchParams.set('nonce', nonce);
       // Force a fresh login so a shared kiosk doesn't silently reuse a session.
-      // ADFS and on-prem AD FS only understand prompt=login/none/consent —
-      // they reject the Entra/Google `select_account` value with invalid_request.
-      authorizeUrl.searchParams.set(
-        'prompt',
-        config.authority || providerName === 'adfs' ? 'login' : 'select_account',
-      );
+      authorizeUrl.searchParams.set('prompt', 'login');
       sendRedirect(res, authorizeUrl.toString());
       return true;
     }
 
-    // op === 'callback' (google / microsoft / keycloak; adfs uses the dedicated route above)
+    // op === 'callback'
     await oauthExchangeCallback(req, res, requestUrl, providerName);
     return true;
   }
@@ -6144,14 +5860,12 @@ async function handleApi(req, res, requestUrl) {
     }
   }
 
-  // OAuth (SSO) sign-in config, per provider (admin-only in the UI, like the
-  // integrations form above). GET never returns the client secret — only whether
-  // one is stored; PUT with a blank/omitted clientSecret keeps the existing one so
-  // the form can round-trip without re-entering it. `tenant` is Microsoft-only
-  // (the Azure directory / tenant id); it is accepted and stored for any provider
-  // but ignored where unused.
+  // OAuth (SSO) sign-in config — Keycloak only (admin-only in the UI, like the
+  // integrations form above). GET never returns the client secret — only
+  // whether one is stored; PUT with a blank/omitted clientSecret keeps the
+  // existing one so the form can round-trip without re-entering it.
   const oauthSettingsMatch = requestUrl.pathname.match(
-    /^\/api\/settings\/oauth\/(google|microsoft|adfs|keycloak)$/,
+    /^\/api\/settings\/oauth\/(keycloak)$/,
   );
   if (oauthSettingsMatch) {
     const providerName = oauthSettingsMatch[1];
@@ -6161,7 +5875,6 @@ async function handleApi(req, res, requestUrl) {
       sendJson(res, 200, {
         enabled: config.enabled,
         clientId: config.clientId,
-        tenant: config.tenant,
         authority: config.authority,
         realm: config.realm,
         allowedDomains: config.allowedDomains,
@@ -6175,7 +5888,6 @@ async function handleApi(req, res, requestUrl) {
       const body = await readJsonBody(req);
       const enabled = body?.enabled === true;
       const clientId = typeof body?.clientId === 'string' ? body.clientId.trim() : '';
-      const tenant = typeof body?.tenant === 'string' ? body.tenant.trim() : '';
       const authority = typeof body?.authority === 'string' ? body.authority.trim() : '';
       const realm = typeof body?.realm === 'string' ? body.realm.trim() : '';
       const displayName = typeof body?.displayName === 'string' ? body.displayName.trim() : '';
@@ -6185,7 +5897,6 @@ async function handleApi(req, res, requestUrl) {
       const logoutEndpoint = typeof body?.logoutEndpoint === 'string' ? body.logoutEndpoint.trim() : '';
       const metadataUrl = typeof body?.metadataUrl === 'string' ? body.metadataUrl.trim() : '';
       const jwksUri = typeof body?.jwksUri === 'string' ? body.jwksUri.trim() : '';
-      const relyingPartyId = typeof body?.relyingPartyId === 'string' ? body.relyingPartyId.trim() : '';
       const allowedDomains = Array.isArray(body?.allowedDomains)
         ? body.allowedDomains
             .map((domain) => String(domain || '').trim().toLowerCase().replace(/^@/, ''))
@@ -6202,7 +5913,6 @@ async function handleApi(req, res, requestUrl) {
         enabled,
         clientId,
         clientSecret,
-        tenant,
         authority,
         realm,
         displayName,
@@ -6212,17 +5922,12 @@ async function handleApi(req, res, requestUrl) {
         logoutEndpoint,
         metadataUrl,
         jwksUri,
-        relyingPartyId,
         allowedDomains,
       });
-      // SSO providers are independent: Google, Microsoft/AD FS, Keycloak, and SAML
-      // can each be enabled at the same time, and the login page renders one
-      // button per enabled provider. Enabling one no longer disables the others.
       const saved = await getOAuthConfig(providerName);
       sendJson(res, 200, {
         enabled: saved.enabled,
         clientId: saved.clientId,
-        tenant: saved.tenant,
         authority: saved.authority,
         realm: saved.realm,
         allowedDomains: saved.allowedDomains,
@@ -6234,165 +5939,9 @@ async function handleApi(req, res, requestUrl) {
         logoutEndpoint: saved.logoutEndpoint,
         metadataUrl: saved.metadataUrl,
         jwksUri: saved.jwksUri,
-        relyingPartyId: saved.relyingPartyId,
       });
       return true;
     }
-  }
-
-  // SAML 2.0 SSO configuration (Settings → SSO Configuration). GET returns the
-  // saved config (the certificate is a public signing cert, so it is returned in
-  // full so the form can round-trip). PUT validates URLs and the cert before
-  // persisting, stamps updatedAt, and — when enabling SAML — disables any OAuth
-  // provider so only one SSO mechanism is active at a time. Admin-only is enforced
-  // in the UI (the cookieless frontend /api/* surface, like the OAuth settings
-  // routes, has no server-side session to gate on; the key-gated /api/v1 surface
-  // is the authenticated path).
-  if (requestUrl.pathname === '/api/settings/saml') {
-    if (req.method === 'GET') {
-      const config = await getSamlConfig();
-      const { spEntityId, acsUrl } = await resolveSamlEndpoints(config, req);
-      sendJson(res, 200, {
-        ...config,
-        // Surface the effective SP identifiers so the form can prefill the
-        // defaults the metadata endpoint advertises when the fields are blank.
-        defaultSpEntityId: await defaultSamlSpEntityId(req),
-        defaultAcsUrl: await defaultSamlAcsUrl(req),
-        effectiveSpEntityId: spEntityId,
-        effectiveAcsUrl: acsUrl,
-      });
-      return true;
-    }
-    if (req.method === 'PUT') {
-      const body = await readJsonBody(req);
-      const enabled = body?.enabled === true;
-      const idpEntityId = typeof body?.idpEntityId === 'string' ? body.idpEntityId.trim() : '';
-      const idpSsoUrl = typeof body?.idpSsoUrl === 'string' ? body.idpSsoUrl.trim() : '';
-      const idpCertificate =
-        typeof body?.idpCertificate === 'string' ? body.idpCertificate.trim() : '';
-      const spEntityId = typeof body?.spEntityId === 'string' ? body.spEntityId.trim() : '';
-      const acsUrl = typeof body?.acsUrl === 'string' ? body.acsUrl.trim() : '';
-      const autoProvisionUsers = body?.autoProvisionUsers === true;
-      const displayName = typeof body?.displayName === 'string' ? body.displayName.trim() : '';
-
-      // URL + certificate validation. URLs, when provided, must be absolute
-      // http(s); the IdP SSO URL and certificate are required to enable the flow.
-      for (const [label, value] of [
-        ['IdP SSO URL', idpSsoUrl],
-        ['SP entity ID', spEntityId],
-        ['ACS URL', acsUrl],
-      ]) {
-        if (value && !isValidHttpUrl(value)) {
-          sendJson(res, 400, { error: `${label} must be a valid http(s) URL` });
-          return true;
-        }
-      }
-      if (idpCertificate && !isValidCertificate(idpCertificate)) {
-        sendJson(res, 400, { error: 'IdP certificate is not a valid X.509 PEM certificate' });
-        return true;
-      }
-      if (enabled && (!idpSsoUrl || !idpCertificate)) {
-        sendJson(res, 400, {
-          error: 'An IdP SSO URL and certificate are required to enable SAML SSO',
-        });
-        return true;
-      }
-
-      await setAppSetting(SAML_SETTINGS_KEY, {
-        enabled,
-        idpEntityId,
-        idpSsoUrl,
-        idpCertificate,
-        spEntityId,
-        acsUrl,
-        autoProvisionUsers,
-        displayName,
-        updatedAt: new Date().toISOString(),
-      });
-      // SSO providers are independent: SAML can be enabled alongside the OAuth
-      // providers (Google, Microsoft/AD FS). Enabling SAML no longer disables them.
-      await recordAuditLog({
-        action: 'settings.saml.update',
-        target: 'saml_sso',
-        details: { enabled, autoProvisionUsers },
-        source: 'web',
-        ip: getClientIp(req),
-      });
-      const saved = await getSamlConfig();
-      const endpoints = await resolveSamlEndpoints(saved, req);
-      sendJson(res, 200, {
-        ...saved,
-        defaultSpEntityId: await defaultSamlSpEntityId(req),
-        defaultAcsUrl: await defaultSamlAcsUrl(req),
-        effectiveSpEntityId: endpoints.spEntityId,
-        effectiveAcsUrl: endpoints.acsUrl,
-      });
-      return true;
-    }
-  }
-
-  // Test the SAML configuration without committing it: validates the submitted
-  // (or stored) values and probes the IdP SSO URL for reachability. Returns a
-  // list of checks the UI renders, plus an overall ok flag.
-  if (requestUrl.pathname === '/api/settings/saml/test' && req.method === 'POST') {
-    const stored = await getSamlConfig();
-    const body = await readJsonBody(req).catch(() => ({}));
-    const idpSsoUrl =
-      typeof body?.idpSsoUrl === 'string' && body.idpSsoUrl.trim()
-        ? body.idpSsoUrl.trim()
-        : stored.idpSsoUrl;
-    const idpCertificate =
-      typeof body?.idpCertificate === 'string' && body.idpCertificate.trim()
-        ? body.idpCertificate.trim()
-        : stored.idpCertificate;
-
-    const checks = [];
-    const urlOk = isValidHttpUrl(idpSsoUrl);
-    checks.push({
-      label: 'IdP SSO URL is a valid http(s) URL',
-      ok: urlOk,
-    });
-    checks.push({
-      label: 'IdP certificate is a valid X.509 certificate',
-      ok: isValidCertificate(idpCertificate),
-    });
-
-    if (urlOk) {
-      // Probe the IdP endpoint. Many IdP SSO endpoints reject a bare GET (they
-      // expect a SAMLRequest), so any HTTP response — even 4xx — proves it is
-      // reachable; only a network/timeout failure counts as unreachable.
-      let reachable = false;
-      let detail = '';
-      try {
-        // H-3: refuse to probe a URL that resolves to a private/reserved address
-        // (loopback, LAN, cloud metadata) so this admin diagnostic can't be used
-        // as an SSRF primitive.
-        await assertPublicHttpTarget(idpSsoUrl);
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 5000);
-        try {
-          const probe = await fetch(idpSsoUrl, {
-            method: 'GET',
-            redirect: 'manual',
-            signal: controller.signal,
-          });
-          reachable = true;
-          detail = `HTTP ${probe.status}`;
-        } finally {
-          clearTimeout(timeout);
-        }
-      } catch (error) {
-        detail = error instanceof Error ? error.message : 'unreachable';
-      }
-      checks.push({
-        label: 'IdP SSO URL is reachable',
-        ok: reachable,
-        detail,
-      });
-    }
-
-    sendJson(res, 200, { ok: checks.every((check) => check.ok), checks });
-    return true;
   }
 
   // Customizable site branding (logo + optional full-page background). GET is
