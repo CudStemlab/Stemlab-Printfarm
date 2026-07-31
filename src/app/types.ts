@@ -17,6 +17,10 @@ export interface Spool {
   vendor?: string; // Brand/vendor label (Bambu tray_id_name); absent when unknown
   remaining: number; // percentage
   weight: number; // grams
+  // Bambu only: this slot's filament is currently fed to the extruder (derived
+  // from the AMS tray_now). Absent for profiles that don't report it. Gates the
+  // RFID re-read, which needs the filament retracted.
+  active?: boolean;
 }
 
 export interface Printer {

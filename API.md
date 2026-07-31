@@ -119,6 +119,13 @@ Lists the available resources.
 | `GET /printers/:id/camera/stream` | Live MJPEG stream where supported, else a single JPEG. |
 | `GET /printers/:id/camera/health` | Live-view supervisor status (frame freshness, viewers, restarts). |
 
+A printer's `spools` array carries the poller's live view of each AMS slot
+(`id`, `material`, `color`, `remaining`, `weight`, plus `tagUid`/`trayUuid` for
+RFID-tagged spools). Each entry also has **`active`** — `true` for the one slot
+whose filament is currently fed to the extruder, `false` for the rest, and false
+on every slot when nothing is loaded. Use it to gate `refresh_rfid` (below) and
+to show which spool a print is actually consuming.
+
 Printer records include an `errorMessage` field: a human-readable description of
 the printer's current fault (Bambu HMS faults, a Moonraker print error, or an
 unreachable-connection reason), set per profile by the poller. It is absent/`null`
@@ -148,7 +155,22 @@ accrued hours aren't overwritten.
 { "command": "pause" }
 ```
 Other accepted fields: `heater`, `target`, `nozzleIndex`, `gcode`, `trayId`,
-`fanPort`, `speed`, `modeId`, `submode`.
+`fanPort`, `speed`, `modeId`, `submode`, `type`, `color`, `vendor`.
+
+**`refresh_rfid`** — ask the AMS to physically re-scan the RFID tag in one slot,
+for when the initial read came back garbled or empty. Bambu only.
+
+```json
+{ "command": "refresh_rfid", "trayId": 2 }
+```
+
+`trayId` is the global tray id (AMS unit × 4 + tray, or `254` for the external
+spool). The AMS has to spin the spool past its reader, so the command only takes
+effect with **no filament loaded** — publish is QoS 0 with no acknowledgement, so
+a call made while filament is loaded returns `204` and silently does nothing.
+Callers can tell which slot is loaded from the `active` flag on each entry of a
+printer's `spools` array. Refreshed tag data lands via the poller within a few
+seconds.
 
 #### Hardware control (non-Bambu) — `/printers/:id/proxy/<path…>`
 
