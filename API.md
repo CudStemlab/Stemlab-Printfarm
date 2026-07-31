@@ -1014,28 +1014,35 @@ curl -H "X-Api-Key: abc123..." http://printfarm.local/api/v1/printers
 ## SSO sign-in API (`/api/auth`)
 
 A **public** endpoint group (no API key) that runs the OAuth 2.0 Authorization
-Code flow for two providers — **`google`** and **`microsoft`** (Microsoft Entra
-ID / Azure AD) — plus **SAML 2.0** SSO against an external identity provider (the
-dashboard is the Service Provider). On a successful sign-in the callback / ACS
-establishes the **HttpOnly session cookie server-side** and `302`-redirects to the
-dashboard — **no auth token is placed in the URL** (an earlier design handed the
-browser a `?oauth_grant=<token>` param; that was removed because a token in the URL
-leaks into the browser network log, history, access logs, and `Referer` headers,
-where a captured copy could be replayed for a session). OAuth sign-ins are granted
-the read-only **`student`** role; SAML sign-ins take their role from the assertion
-(or keep the stored role of an existing staff account) — see the SAML section below.
+Code flow for four providers — **`google`**, **`microsoft`** (Microsoft Entra ID /
+Azure AD), **`adfs`** (on-prem AD FS), and **`keycloak`** — plus **SAML 2.0** SSO
+against an external identity provider (the dashboard is the Service Provider). On
+a successful sign-in the callback / ACS establishes the **HttpOnly session cookie
+server-side** and `302`-redirects to the dashboard — **no auth token is placed in
+the URL** (an earlier design handed the browser a `?oauth_grant=<token>` param;
+that was removed because a token in the URL leaks into the browser network log,
+history, access logs, and `Referer` headers, where a captured copy could be
+replayed for a session). OAuth sign-ins are granted the read-only **`student`**
+role; SAML sign-ins take their role from the assertion (or keep the stored role of
+an existing staff account) — see the SAML section below.
 
-Configure each provider's client id/secret, optional allowed email domains, and
-(Microsoft only) either the cloud directory **Tenant ID** or an on-prem **AD FS
-authority URL** (the `/adfs` deep link) in **Settings → Sign-in**; nothing is
-baked into the build. Register `<origin>/api/auth/<provider>/callback` as a
-redirect URI with the provider (Google Cloud console / Azure app registration /
-AD FS relying-party); the origin is the configured [SSO public
+Configure each provider's client id/secret and optional allowed email domains in
+**Settings → Sign-in**; nothing is baked into the build. Google and Microsoft use
+their standard cloud endpoints (Microsoft optionally scoped to a **Tenant ID**).
+ADFS and Keycloak are self-hosted/on-prem OIDC IdPs whose endpoints are instead
+derived from an admin-set **authority** base URL — ADFS as
+`<authority>/oauth2/{authorize,token,logout}`, Keycloak (additionally realm-scoped)
+as `<authority>/realms/<realm>/protocol/openid-connect/{auth,token,logout}` — with
+every derived endpoint (plus the redirect URI) overridable when an IdP uses
+non-standard paths. Register `<origin>/api/auth/<provider>/callback` as a redirect
+URI with the provider (Google Cloud console / Azure app registration / ADFS
+relying-party / Keycloak client), except ADFS which uses the fixed
+`<origin>/api/auth/oauth2_redirect` path; the origin is the configured [SSO public
 URL](#sso-public-url-apisettingssso-public-url) (Settings → Sign-in), else
 `APP_BASE_URL`, else derived from `X-Forwarded-Proto`/`Host`.
 
-Both providers may be enabled at once — the login page shows a button for each
-enabled provider.
+Any number of providers may be enabled at once — the login page shows a button for
+each enabled provider.
 
 ### Endpoints
 
@@ -1047,15 +1054,15 @@ Which providers are configured **and** enabled. Drives the login buttons.
 **Response `200`** (`saml` reflects whether SAML SSO is enabled + configured):
 
 ```json
-{ "google": true, "microsoft": false, "saml": false }
+{ "google": true, "microsoft": false, "adfs": false, "keycloak": false, "saml": false }
 ```
 
 ---
 
 #### `GET /api/auth/:provider/config`
 
-Whether a single provider (`google` or `microsoft`) is configured **and**
-enabled. **Public.**
+Whether a single provider (`google`, `microsoft`, `adfs`, or `keycloak`) is
+configured **and** enabled. **Public.**
 
 **Response `200`:** `{ "enabled": true }`
 
@@ -1075,11 +1082,13 @@ disabled/unconfigured it redirects to `/login?oauth_error=not_configured`.
 The provider redirects here with `?code=&state=`. **Public.** Verifies `state`
 (including that it was minted for this provider), exchanges the code at the
 provider's token endpoint (server-to-server with the client secret), requires an
-email (Google `email`; Microsoft falls back to `preferred_username`/`upn`) that
-is not explicitly unverified and (if configured) an allowed domain, then
-**establishes the session cookie** (`Set-Cookie: pf_session`, HttpOnly) and
-`302`-redirects to `/`. The user id is namespaced by provider (`google:<sub>` /
-`microsoft:<sub>`) and the role is `student`.
+email (Google `email`; Microsoft/ADFS/Keycloak fall back to
+`preferred_username`/`upn`/`unique_name`) that is not explicitly unverified and (if
+configured) an allowed domain, then **establishes the session cookie**
+(`Set-Cookie: pf_session`, HttpOnly) and `302`-redirects to `/`. The user id is
+namespaced by provider (`google:<sub>` / `microsoft:<sub>` / `adfs:<sub>` /
+`keycloak:<sub>`) and the role is `student`. (ADFS actually lands on the fixed
+`/api/auth/oauth2_redirect` path rather than this route — see below.)
 
 On any failure it `302`-redirects to `/login?oauth_error=<code>` where `<code>`
 is one of `not_configured`, `denied`, `exchange_failed`, `unverified_email`, or
@@ -1425,9 +1434,9 @@ Deletes a rule. **Response `204`**; `404` if the id is unknown.
 
 Admin-only in the UI (client-side session guard, like
 `/api/settings/integrations`). Stores each provider's OAuth config in
-`app_settings` (`:provider` is `google`, `microsoft`, or `adfs`). `tenant` and
-`authority` are Microsoft-only; they are accepted for any provider but ignored
-where unused.
+`app_settings` (`:provider` is `google`, `microsoft`, `adfs`, or `keycloak`).
+`tenant` is Microsoft-only; `authority` is Microsoft/ADFS/Keycloak; `realm` is
+Keycloak-only. All fields are accepted for any provider but ignored where unused.
 
 For Microsoft, two modes are supported:
 - **Cloud (Entra ID):** leave `authority` blank and set `tenant` (a directory GUID,
@@ -1443,6 +1452,15 @@ registered callback path is `/api/auth/oauth2_redirect` (not the default
 `/api/auth/adfs/callback` pattern). All config is stored in the database via
 Settings → Sign-in → ADFS.
 
+For `keycloak`, both `authority` (the Keycloak server base URL, e.g.
+`https://keycloak.example.com`) and `realm` are **required** — endpoints are
+derived as `<authority>/realms/<realm>/protocol/openid-connect/{auth,token,logout}`.
+Unlike ADFS, Keycloak uses the standard per-provider callback path
+(`/api/auth/keycloak/callback`), so nothing extra needs registering beyond that
+redirect URI and the client credentials from Keycloak's Admin Console (realm →
+Clients). As with ADFS, `authorizeEndpoint`/`tokenEndpoint`/`logoutEndpoint` may
+each be overridden explicitly when an instance uses non-standard paths.
+
 #### `GET /api/settings/oauth/:provider`
 
 **Response `200`** — the client secret is **never** returned, only whether one
@@ -1454,6 +1472,7 @@ is stored:
   "clientId": "xxxx",
   "tenant": "00000000-0000-0000-0000-000000000000",
   "authority": "",
+  "realm": "",
   "allowedDomains": ["school.edu"],
   "hasClientSecret": true
 }
@@ -1470,6 +1489,7 @@ is stored:
   "clientSecret": "secret-value",
   "tenant": "00000000-0000-0000-0000-000000000000",
   "authority": "https://sso.example.com/adfs",
+  "realm": "",
   "allowedDomains": ["school.edu"]
 }
 ```
@@ -1478,9 +1498,9 @@ A blank/omitted `clientSecret` **keeps** the stored one (so the form can
 round-trip without re-entering it); a non-empty value replaces it. Returns the
 same redacted shape as `GET`.
 
-**SSO providers are independent:** Google, Microsoft/AD FS, and SAML can each be
-enabled at the same time. Saving one provider no longer disables the others — the
-login screen shows one sign-in button per enabled provider.
+**SSO providers are independent:** Google, Microsoft/AD FS, Keycloak, and SAML can
+each be enabled at the same time. Saving one provider no longer disables the
+others — the login screen shows one sign-in button per enabled provider.
 
 ## SSO configuration (`/api/settings/saml`)
 

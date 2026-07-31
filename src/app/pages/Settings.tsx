@@ -148,7 +148,7 @@ export function Settings() {
   const [actioningManagerId, setActioningManagerId] = useState<string | null>(null);
   // Which SSO provider's config form to show. Only one provider is configured at
   // a time — the admin picks before the form appears.
-  const [ssoProvider, setSsoProvider] = useState<'google' | 'microsoft' | 'adfs' | 'saml'>('google');
+  const [ssoProvider, setSsoProvider] = useState<'google' | 'microsoft' | 'adfs' | 'keycloak' | 'saml'>('google');
   // Website access mode: whether an unauthenticated visitor can view the
   // dashboard read-only, or is sent to the login screen.
   const [publicViewerEnabled, setPublicViewerEnabled] = useState(true);
@@ -207,8 +207,10 @@ export function Settings() {
     // Open the Sign-in tab on whichever SSO provider is currently active.
     fetchEnabledOAuthProviders()
       .then((providers) => {
-        if (providers.saml && !providers.google && !providers.microsoft && !providers.adfs) {
+        if (providers.saml && !providers.google && !providers.microsoft && !providers.adfs && !providers.keycloak) {
           setSsoProvider('saml');
+        } else if (providers.keycloak && !providers.google && !providers.microsoft && !providers.adfs) {
+          setSsoProvider('keycloak');
         } else if (providers.adfs && !providers.google && !providers.microsoft) {
           setSsoProvider('adfs');
         } else if (providers.microsoft && !providers.google) {
@@ -2243,7 +2245,7 @@ export function Settings() {
                 </p>
                 <Select
                   value={ssoProvider}
-                  onValueChange={(value) => setSsoProvider(value as 'google' | 'microsoft' | 'adfs' | 'saml')}
+                  onValueChange={(value) => setSsoProvider(value as 'google' | 'microsoft' | 'adfs' | 'keycloak' | 'saml')}
                   disabled={user?.role !== 'admin'}
                 >
                   <SelectTrigger id="sso-provider" className="w-full sm:w-72">
@@ -2253,6 +2255,7 @@ export function Settings() {
                     <SelectItem value="google">Google</SelectItem>
                     <SelectItem value="microsoft">Microsoft</SelectItem>
                     <SelectItem value="adfs">ADFS</SelectItem>
+                    <SelectItem value="keycloak">Keycloak</SelectItem>
                     <SelectItem value="saml">SAML 2.0</SelectItem>
                   </SelectContent>
                 </Select>
@@ -2295,6 +2298,34 @@ export function Settings() {
                   <>
                     Satit-M Chula AD FS — enter the Client ID, Secret, authority
                     URL, and the redirect URI exactly as registered with the IdP.
+                  </>
+                }
+              />
+            )}
+            {ssoProvider === 'keycloak' && (
+              <OAuthProviderSettings
+                provider="keycloak"
+                label="Keycloak"
+                showAuthority
+                showRealm
+                showRelyingPartyId={false}
+                showDisplayName
+                disabled={user?.role !== 'admin'}
+                authorityPlaceholder="https://keycloak.example.com"
+                authorityLabel="Keycloak Server URL"
+                authorityDescription={
+                  <>
+                    Base URL of the Keycloak server (no trailing path, e.g.{' '}
+                    <code>https://keycloak.example.com</code>). Combined with the
+                    realm below to derive the OIDC endpoints when left blank.
+                  </>
+                }
+                realmPlaceholder="printfarm"
+                setupHint={
+                  <>
+                    Create a client in the Keycloak Admin Console (realm →
+                    Clients → Create client, client authentication on) and add
+                    the redirect URI below.
                   </>
                 }
               />

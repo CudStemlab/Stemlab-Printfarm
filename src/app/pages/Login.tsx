@@ -48,10 +48,12 @@ export function Login() {
     google: false,
     microsoft: false,
     adfs: false,
+    keycloak: false,
     saml: false,
     googleLabel: '',
     microsoftLabel: '',
     adfsLabel: '',
+    keycloakLabel: '',
     samlLabel: '',
   });
 
@@ -309,7 +311,7 @@ export function Login() {
               </div>
             )}
 
-            {(oauthProviders.google || oauthProviders.microsoft || oauthProviders.adfs || oauthProviders.saml) &&
+            {(oauthProviders.google || oauthProviders.microsoft || oauthProviders.adfs || oauthProviders.keycloak || oauthProviders.saml) &&
               !showSetup && (
               <>
                 <div className="flex items-center gap-3">
@@ -343,6 +345,20 @@ export function Login() {
                   >
                     <KeyRound className="size-5" />
                     {oauthProviders.adfsLabel || 'Sign in with ADFS'}
+                  </Button>
+                )}
+                {oauthProviders.keycloak && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="h-14 w-full gap-3 text-base"
+                    disabled={isLoading}
+                    onClick={() => {
+                      window.location.href = '/api/auth/keycloak/start';
+                    }}
+                  >
+                    <KeyRound className="size-5" />
+                    {oauthProviders.keycloakLabel || 'Sign in with Keycloak'}
                   </Button>
                 )}
                 {oauthProviders.google && (

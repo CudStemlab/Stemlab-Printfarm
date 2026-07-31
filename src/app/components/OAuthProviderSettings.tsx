@@ -17,8 +17,15 @@ interface OAuthProviderSettingsProps {
   label: string;
   // Shows authority URL + tenant ID fields (Microsoft cloud / on-prem AD FS).
   showTenant?: boolean;
-  // Shows just the authority URL field without the tenant ID (ADFS).
+  // Shows just the authority URL field without the tenant ID (ADFS, Keycloak).
   showAuthority?: boolean;
+  // Shows a realm field alongside the authority URL (Keycloak, whose OIDC
+  // endpoints are scoped under <authority>/realms/<realm>/...).
+  showRealm?: boolean;
+  // Shows the Relying Party Identifier field (ADFS-specific audience URI concept).
+  // Defaults to true whenever showAuthority is set, since that was the only
+  // caller until Keycloak, which has no equivalent and opts out.
+  showRelyingPartyId?: boolean;
   // Shows a "Button label" field to customise the login-page button text.
   showDisplayName?: boolean;
   // Only admins may change these; others see a read-only form.
@@ -26,6 +33,14 @@ interface OAuthProviderSettingsProps {
   clientIdPlaceholder?: string;
   // Placeholder for the authority URL input.
   authorityPlaceholder?: string;
+  // Placeholder for the realm input (shown when showRealm is set).
+  realmPlaceholder?: string;
+  // Label + description for the authority field; defaults to ADFS copy for
+  // backward compat, override for other authority-based providers.
+  authorityLabel?: string;
+  authorityDescription?: React.ReactNode;
+  // Placeholder for the explicit Redirect URI override field.
+  redirectUriPlaceholder?: string;
   // Short admin-facing description of where to create the OAuth client.
   setupHint: React.ReactNode;
 }
@@ -39,10 +54,16 @@ export function OAuthProviderSettings({
   label,
   showTenant = false,
   showAuthority = false,
+  showRealm = false,
+  showRelyingPartyId = showAuthority,
   showDisplayName = false,
   disabled = false,
   clientIdPlaceholder,
   authorityPlaceholder = 'https://sso.example.com/adfs',
+  realmPlaceholder = 'printfarm',
+  authorityLabel,
+  authorityDescription,
+  redirectUriPlaceholder,
   setupHint,
 }: OAuthProviderSettingsProps) {
   const [enabled, setEnabled] = useState(false);
@@ -51,6 +72,7 @@ export function OAuthProviderSettings({
   const [hasSecret, setHasSecret] = useState(false);
   const [tenant, setTenant] = useState('');
   const [authority, setAuthority] = useState('');
+  const [realm, setRealm] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [redirectUri, setRedirectUri] = useState('');
   const [authorizeEndpoint, setAuthorizeEndpoint] = useState('');
@@ -74,6 +96,7 @@ export function OAuthProviderSettings({
         setHasSecret(settings.hasClientSecret);
         setTenant(settings.tenant);
         setAuthority(settings.authority);
+        setRealm(settings.realm ?? '');
         setAllowedDomains(settings.allowedDomains.join('\n'));
         setDisplayName(settings.displayName);
         setRedirectUri(settings.redirectUri ?? '');
@@ -102,6 +125,7 @@ export function OAuthProviderSettings({
     const trimmedClientId = clientId.trim();
     const trimmedTenant = tenant.trim();
     const trimmedAuthority = authority.trim();
+    const trimmedRealm = realm.trim();
     const domains = allowedDomains
       .split(/[\s,]+/)
       .map((domain) => domain.trim().toLowerCase().replace(/^@/, ''))
@@ -123,6 +147,10 @@ export function OAuthProviderSettings({
         toast.error(`An authority URL is required to enable ${label} sign-in.`);
         return;
       }
+      if (showRealm && !trimmedRealm) {
+        toast.error(`A realm is required to enable ${label} sign-in.`);
+        return;
+      }
     }
 
     setSaving(true);
@@ -132,6 +160,7 @@ export function OAuthProviderSettings({
         clientId: trimmedClientId,
         tenant: trimmedTenant,
         authority: trimmedAuthority,
+        realm: trimmedRealm,
         clientSecret: clientSecret.trim(),
         allowedDomains: domains,
         displayName: displayName.trim(),
@@ -148,6 +177,7 @@ export function OAuthProviderSettings({
       setHasSecret(saved.hasClientSecret);
       setTenant(saved.tenant);
       setAuthority(saved.authority);
+      setRealm(saved.realm ?? '');
       setAllowedDomains(saved.allowedDomains.join('\n'));
       setDisplayName(saved.displayName);
       setRedirectUri(saved.redirectUri ?? '');
@@ -168,7 +198,17 @@ export function OAuthProviderSettings({
     }
   };
 
-  const defaultCallbackUrl = `${typeof window !== 'undefined' ? window.location.origin : ''}/api/auth/${provider}/callback`;
+  const origin = typeof window !== 'undefined' ? window.location.origin : '';
+  const defaultCallbackUrl = `${origin}/api/auth/${provider}/callback`;
+  const endpointBase = authority.trim().replace(/\/+$/, '');
+  // Keycloak scopes every OIDC endpoint under /realms/<realm>/protocol/openid-connect/*;
+  // ADFS's are directly under the authority. Used only for placeholder text —
+  // the actual derivation happens server-side.
+  const derivedEndpointBase = showRealm
+    ? endpointBase && realm.trim()
+      ? `${endpointBase}/realms/${realm.trim()}/protocol/openid-connect`
+      : ''
+    : endpointBase;
 
   return (
     <Card className="p-6">
@@ -209,7 +249,7 @@ export function OAuthProviderSettings({
         {(showTenant || showAuthority) && (
           <div className="space-y-2">
             <Label htmlFor={`oauth-authority-${provider}`}>
-              {showAuthority && !showTenant ? 'ADFS Authority URL' : 'AD FS authority URL (optional)'}
+              {authorityLabel ?? (showAuthority && !showTenant ? 'ADFS Authority URL' : 'AD FS authority URL (optional)')}
             </Label>
             <Input
               id={`oauth-authority-${provider}`}
@@ -221,7 +261,7 @@ export function OAuthProviderSettings({
               autoComplete="off"
             />
             <p className="text-xs text-muted-foreground">
-              {showAuthority && !showTenant ? (
+              {authorityDescription ?? (showAuthority && !showTenant ? (
                 <>
                   Base URL of the ADFS server (the <code>/adfs</code> deep link, e.g.{' '}
                   <code>https://sso.example.com/adfs</code>). Used to derive the
@@ -235,7 +275,28 @@ export function OAuthProviderSettings({
                   <code>/oauth2/token</code>. Leave blank to use the Microsoft cloud
                   (Entra ID) with the Tenant ID below.
                 </>
-              )}
+              ))}
+            </p>
+          </div>
+        )}
+
+        {showRealm && (
+          <div className="space-y-2">
+            <Label htmlFor={`oauth-realm-${provider}`}>Realm</Label>
+            <Input
+              id={`oauth-realm-${provider}`}
+              value={realm}
+              onChange={(e) => setRealm(e.target.value)}
+              placeholder={realmPlaceholder}
+              disabled={disabled}
+              spellCheck={false}
+              autoComplete="off"
+            />
+            <p className="text-xs text-muted-foreground">
+              The Keycloak realm this client is registered in. Combined with the
+              authority URL above to derive the OIDC endpoints below (
+              <code>&lt;authority&gt;/realms/&lt;realm&gt;/protocol/openid-connect/...</code>
+              ) when those fields are left blank.
             </p>
           </div>
         )}
@@ -248,14 +309,14 @@ export function OAuthProviderSettings({
                 id={`oauth-redirect-uri-${provider}`}
                 value={redirectUri}
                 onChange={(e) => setRedirectUri(e.target.value)}
-                placeholder={`${typeof window !== 'undefined' ? window.location.origin : ''}/api/auth/oauth2_redirect`}
+                placeholder={redirectUriPlaceholder ?? defaultCallbackUrl}
                 disabled={disabled}
                 spellCheck={false}
                 autoComplete="off"
               />
               <p className="text-xs text-muted-foreground">
                 The exact redirect URI registered with the IdP (e.g.{' '}
-                <code>https://your-domain.com/api/auth/oauth2_redirect</code>).
+                <code>{redirectUriPlaceholder ?? defaultCallbackUrl}</code>).
                 Must match what the IdP has on file — used verbatim so it works
                 correctly behind a reverse proxy.
               </p>
@@ -267,7 +328,11 @@ export function OAuthProviderSettings({
                 id={`oauth-authorize-endpoint-${provider}`}
                 value={authorizeEndpoint}
                 onChange={(e) => setAuthorizeEndpoint(e.target.value)}
-                placeholder={authority ? `${authority.replace(/\/+$/, '')}/oauth2/authorize` : 'https://sso.example.com/adfs/oauth2/authorize'}
+                placeholder={
+                  derivedEndpointBase
+                    ? `${derivedEndpointBase}/${showRealm ? 'auth' : 'oauth2/authorize'}`
+                    : `${authorityPlaceholder}/${showRealm ? 'realms/printfarm/protocol/openid-connect/auth' : 'oauth2/authorize'}`
+                }
                 disabled={disabled}
                 spellCheck={false}
                 autoComplete="off"
@@ -283,7 +348,11 @@ export function OAuthProviderSettings({
                 id={`oauth-token-endpoint-${provider}`}
                 value={tokenEndpoint}
                 onChange={(e) => setTokenEndpoint(e.target.value)}
-                placeholder={authority ? `${authority.replace(/\/+$/, '')}/oauth2/token` : 'https://sso.example.com/adfs/oauth2/token'}
+                placeholder={
+                  derivedEndpointBase
+                    ? `${derivedEndpointBase}/token`
+                    : `${authorityPlaceholder}/${showRealm ? 'realms/printfarm/protocol/openid-connect/token' : 'oauth2/token'}`
+                }
                 disabled={disabled}
                 spellCheck={false}
                 autoComplete="off"
@@ -299,7 +368,11 @@ export function OAuthProviderSettings({
                 id={`oauth-logout-endpoint-${provider}`}
                 value={logoutEndpoint}
                 onChange={(e) => setLogoutEndpoint(e.target.value)}
-                placeholder={authority ? `${authority.replace(/\/+$/, '')}/oauth2/logout` : 'https://sso.example.com/adfs/oauth2/logout'}
+                placeholder={
+                  derivedEndpointBase
+                    ? `${derivedEndpointBase}/logout`
+                    : `${authorityPlaceholder}/${showRealm ? 'realms/printfarm/protocol/openid-connect/logout' : 'oauth2/logout'}`
+                }
                 disabled={disabled}
                 spellCheck={false}
                 autoComplete="off"
@@ -315,7 +388,13 @@ export function OAuthProviderSettings({
                 id={`oauth-metadata-url-${provider}`}
                 value={metadataUrl}
                 onChange={(e) => setMetadataUrl(e.target.value)}
-                placeholder={authority ? `${authority.replace(/\/+$/, '')}/.well-known/openid-configuration` : 'https://sso.example.com/adfs/.well-known/openid-configuration'}
+                placeholder={
+                  showRealm
+                    ? (endpointBase && realm.trim()
+                        ? `${endpointBase}/realms/${realm.trim()}/.well-known/openid-configuration`
+                        : `${authorityPlaceholder}/realms/printfarm/.well-known/openid-configuration`)
+                    : (endpointBase ? `${endpointBase}/.well-known/openid-configuration` : `${authorityPlaceholder}/.well-known/openid-configuration`)
+                }
                 disabled={disabled}
                 spellCheck={false}
                 autoComplete="off"
@@ -331,7 +410,11 @@ export function OAuthProviderSettings({
                 id={`oauth-jwks-uri-${provider}`}
                 value={jwksUri}
                 onChange={(e) => setJwksUri(e.target.value)}
-                placeholder={authority ? `${authority.replace(/\/+$/, '')}/discovery/keys` : 'https://sso.example.com/adfs/discovery/keys'}
+                placeholder={
+                  derivedEndpointBase
+                    ? `${derivedEndpointBase}/${showRealm ? 'certs' : 'discovery/keys'}`
+                    : `${authorityPlaceholder}/${showRealm ? 'realms/printfarm/protocol/openid-connect/certs' : 'discovery/keys'}`
+                }
                 disabled={disabled}
                 spellCheck={false}
                 autoComplete="off"
@@ -341,22 +424,24 @@ export function OAuthProviderSettings({
               </p>
             </div>
 
-            <div className="space-y-2">
-              <Label htmlFor={`oauth-relying-party-id-${provider}`}>Relying Party Identifier</Label>
-              <Input
-                id={`oauth-relying-party-id-${provider}`}
-                value={relyingPartyId}
-                onChange={(e) => setRelyingPartyId(e.target.value)}
-                placeholder="https://your-domain.com/"
-                disabled={disabled}
-                spellCheck={false}
-                autoComplete="off"
-              />
-              <p className="text-xs text-muted-foreground">
-                Relying Party Trust identifier registered in ADFS (the audience URI, e.g.{' '}
-                <code>https://your-domain.com/</code>).
-              </p>
-            </div>
+            {showRelyingPartyId && (
+              <div className="space-y-2">
+                <Label htmlFor={`oauth-relying-party-id-${provider}`}>Relying Party Identifier</Label>
+                <Input
+                  id={`oauth-relying-party-id-${provider}`}
+                  value={relyingPartyId}
+                  onChange={(e) => setRelyingPartyId(e.target.value)}
+                  placeholder="https://your-domain.com/"
+                  disabled={disabled}
+                  spellCheck={false}
+                  autoComplete="off"
+                />
+                <p className="text-xs text-muted-foreground">
+                  Relying Party Trust identifier registered in ADFS (the audience URI, e.g.{' '}
+                  <code>https://your-domain.com/</code>).
+                </p>
+              </div>
+            )}
           </>
         )}
 

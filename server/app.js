@@ -678,6 +678,28 @@ const OAUTH_PROVIDERS = {
       config.logoutEndpoint || `${config.authority.replace(/\/+$/, '')}/oauth2/logout`,
     callbackPath: '/api/auth/oauth2_redirect',
   },
+  // Keycloak — like ADFS, an on-prem/self-hosted OIDC IdP whose endpoints are
+  // derived from an admin-set base URL, but Keycloak additionally scopes every
+  // OIDC endpoint under a realm: <authority>/realms/<realm>/protocol/openid-connect/*.
+  // `authority` (the Keycloak server base URL, e.g. https://keycloak.example.com)
+  // and `realm` are both required; the callback uses the standard per-provider
+  // path (no fixed registered path like ADFS needs).
+  keycloak: {
+    settingsKey: 'oauth_keycloak',
+    label: 'Keycloak',
+    usesTenant: false,
+    requiresAuthority: true,
+    requiresRealm: true,
+    authorizeEndpoint: (config) =>
+      config.authorizeEndpoint ||
+      `${config.authority.replace(/\/+$/, '')}/realms/${encodeURIComponent(config.realm)}/protocol/openid-connect/auth`,
+    tokenEndpoint: (config) =>
+      config.tokenEndpoint ||
+      `${config.authority.replace(/\/+$/, '')}/realms/${encodeURIComponent(config.realm)}/protocol/openid-connect/token`,
+    logoutEndpoint: (config) =>
+      config.logoutEndpoint ||
+      `${config.authority.replace(/\/+$/, '')}/realms/${encodeURIComponent(config.realm)}/protocol/openid-connect/logout`,
+  },
 };
 const OAUTH_SCOPE = 'openid email profile';
 const OAUTH_SIGNING_SECRET_KEY = 'oauth_signing_secret';
@@ -714,6 +736,8 @@ async function getOAuthConfig(providerName) {
     tenant: typeof stored.tenant === 'string' ? stored.tenant.trim() : '',
     // On-prem AD FS authority base (e.g. https://host/adfs); blank = use cloud.
     authority: typeof stored.authority === 'string' ? stored.authority.trim() : '',
+    // Keycloak: the realm name, used with `authority` to derive the OIDC endpoints.
+    realm: typeof stored.realm === 'string' ? stored.realm.trim() : '',
     allowedDomains,
     // Custom label shown on the login-page sign-in button (e.g. "Sign in with Satit-M").
     // Falls back to the provider's built-in label when blank.
@@ -733,7 +757,8 @@ async function getOAuthConfig(providerName) {
 
 // True only when the flow can actually run: enabled + credentials + any
 // provider-specific required fields (Microsoft needs tenant or authority; ADFS
-// needs authority since its endpoints are derived from it).
+// needs authority since its endpoints are derived from it; Keycloak needs both
+// authority and realm).
 function isOAuthConfigured(config) {
   if (!config || !config.enabled || !config.clientId || !config.clientSecret) {
     return false;
@@ -743,6 +768,9 @@ function isOAuthConfigured(config) {
     return false;
   }
   if (provider?.requiresAuthority && !config.authority) {
+    return false;
+  }
+  if (provider?.requiresRealm && !config.realm) {
     return false;
   }
   return true;
@@ -4644,20 +4672,23 @@ async function handleApi(req, res, requestUrl) {
   //   GET  /api/auth/:provider/start    → 302 to the provider's consent screen
   //   GET  /api/auth/:provider/callback → exchange code, set session cookie, 302 to /
   if (requestUrl.pathname === '/api/auth/providers' && req.method === 'GET') {
-    const [google, microsoft, adfs, saml] = await Promise.all([
+    const [google, microsoft, adfs, keycloak, saml] = await Promise.all([
       getOAuthConfig('google'),
       getOAuthConfig('microsoft'),
       getOAuthConfig('adfs'),
+      getOAuthConfig('keycloak'),
       getSamlConfig(),
     ]);
     sendJson(res, 200, {
       google: isOAuthConfigured(google),
       microsoft: isOAuthConfigured(microsoft),
       adfs: isOAuthConfigured(adfs),
+      keycloak: isOAuthConfigured(keycloak),
       saml: isSamlConfigured(saml),
       googleLabel: google?.displayName || '',
       microsoftLabel: microsoft?.displayName || '',
       adfsLabel: adfs?.displayName || '',
+      keycloakLabel: keycloak?.displayName || '',
       samlLabel: saml?.displayName || '',
     });
     return true;
@@ -4799,7 +4830,7 @@ async function handleApi(req, res, requestUrl) {
   }
 
   const ssoMatch = requestUrl.pathname.match(
-    /^\/api\/auth\/(google|microsoft|adfs)\/(config|start|callback)$/,
+    /^\/api\/auth\/(google|microsoft|adfs|keycloak)\/(config|start|callback)$/,
   );
   if (ssoMatch && req.method === 'GET') {
     const providerName = ssoMatch[1];
@@ -4849,7 +4880,7 @@ async function handleApi(req, res, requestUrl) {
       return true;
     }
 
-    // op === 'callback' (google / microsoft only; adfs uses the dedicated route above)
+    // op === 'callback' (google / microsoft / keycloak; adfs uses the dedicated route above)
     await oauthExchangeCallback(req, res, requestUrl, providerName);
     return true;
   }
@@ -6120,7 +6151,7 @@ async function handleApi(req, res, requestUrl) {
   // (the Azure directory / tenant id); it is accepted and stored for any provider
   // but ignored where unused.
   const oauthSettingsMatch = requestUrl.pathname.match(
-    /^\/api\/settings\/oauth\/(google|microsoft|adfs)$/,
+    /^\/api\/settings\/oauth\/(google|microsoft|adfs|keycloak)$/,
   );
   if (oauthSettingsMatch) {
     const providerName = oauthSettingsMatch[1];
@@ -6132,6 +6163,7 @@ async function handleApi(req, res, requestUrl) {
         clientId: config.clientId,
         tenant: config.tenant,
         authority: config.authority,
+        realm: config.realm,
         allowedDomains: config.allowedDomains,
         hasClientSecret: config.clientSecret.length > 0,
         displayName: config.displayName,
@@ -6145,6 +6177,7 @@ async function handleApi(req, res, requestUrl) {
       const clientId = typeof body?.clientId === 'string' ? body.clientId.trim() : '';
       const tenant = typeof body?.tenant === 'string' ? body.tenant.trim() : '';
       const authority = typeof body?.authority === 'string' ? body.authority.trim() : '';
+      const realm = typeof body?.realm === 'string' ? body.realm.trim() : '';
       const displayName = typeof body?.displayName === 'string' ? body.displayName.trim() : '';
       const redirectUri = typeof body?.redirectUri === 'string' ? body.redirectUri.trim() : '';
       const authorizeEndpoint = typeof body?.authorizeEndpoint === 'string' ? body.authorizeEndpoint.trim() : '';
@@ -6171,6 +6204,7 @@ async function handleApi(req, res, requestUrl) {
         clientSecret,
         tenant,
         authority,
+        realm,
         displayName,
         redirectUri,
         authorizeEndpoint,
@@ -6181,15 +6215,16 @@ async function handleApi(req, res, requestUrl) {
         relyingPartyId,
         allowedDomains,
       });
-      // SSO providers are independent: Google, Microsoft/AD FS, and SAML can each
-      // be enabled at the same time, and the login page renders one button per
-      // enabled provider. Enabling one no longer disables the others.
+      // SSO providers are independent: Google, Microsoft/AD FS, Keycloak, and SAML
+      // can each be enabled at the same time, and the login page renders one
+      // button per enabled provider. Enabling one no longer disables the others.
       const saved = await getOAuthConfig(providerName);
       sendJson(res, 200, {
         enabled: saved.enabled,
         clientId: saved.clientId,
         tenant: saved.tenant,
         authority: saved.authority,
+        realm: saved.realm,
         allowedDomains: saved.allowedDomains,
         hasClientSecret: saved.clientSecret.length > 0,
         displayName: saved.displayName,

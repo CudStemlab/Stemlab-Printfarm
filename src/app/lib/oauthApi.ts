@@ -1,4 +1,4 @@
-// OAuth (SSO) sign-in — Google, Microsoft Entra ID, and Satit-M Chula ADFS.
+// OAuth (SSO) sign-in — Google, Microsoft Entra ID, Satit-M Chula ADFS, and Keycloak.
 // The dashboard auth is cookieless, so the server runs the Authorization Code
 // flow and hands the authenticated identity back to the client as a short-lived,
 // HMAC-signed grant token in a URL param (`?oauth_grant=`). The client verifies
@@ -7,7 +7,7 @@
 
 import type { UserRole } from './usersApi';
 
-export type OAuthProvider = 'google' | 'microsoft' | 'adfs';
+export type OAuthProvider = 'google' | 'microsoft' | 'adfs' | 'keycloak';
 
 export interface OAuthUser {
   id: string;
@@ -22,10 +22,12 @@ export interface EnabledOAuthProviders {
   google: boolean;
   microsoft: boolean;
   adfs: boolean;
+  keycloak: boolean;
   saml: boolean;
   googleLabel: string;
   microsoftLabel: string;
   adfsLabel: string;
+  keycloakLabel: string;
   samlLabel: string;
 }
 
@@ -33,19 +35,21 @@ export interface EnabledOAuthProviders {
 // never returned — only whether one is stored. `tenant` and `authority` are
 // Microsoft-only: `tenant` for the Microsoft cloud (Entra ID), `authority` for an
 // on-prem AD FS base URL (e.g. https://host/adfs) when not using the cloud.
+// `realm` is Keycloak-only — combined with `authority` to derive its endpoints.
 export interface OAuthSettings {
   enabled: boolean;
   clientId: string;
   tenant: string;
   authority: string;
+  realm: string;
   allowedDomains: string[];
   hasClientSecret: boolean;
   displayName: string;
-  // ADFS: full redirect URI pre-registered with the IdP. Used verbatim so the
-  // correct URL is sent even behind a TLS-terminating proxy.
+  // ADFS/Keycloak: full redirect URI pre-registered with the IdP. Used verbatim
+  // so the correct URL is sent even behind a TLS-terminating proxy.
   redirectUri: string;
-  // ADFS: explicit endpoint URLs. When set, used verbatim instead of deriving
-  // from authority (useful when the IdP uses non-standard paths).
+  // ADFS/Keycloak: explicit endpoint URLs. When set, used verbatim instead of
+  // deriving from authority (useful when the IdP uses non-standard paths).
   authorizeEndpoint: string;
   tokenEndpoint: string;
   logoutEndpoint: string;
@@ -59,6 +63,7 @@ export interface OAuthSettingsInput {
   clientId: string;
   tenant: string;
   authority: string;
+  realm: string;
   // Blank means "keep the stored secret"; a value replaces it.
   clientSecret: string;
   allowedDomains: string[];
@@ -91,23 +96,25 @@ export async function fetchEnabledOAuthProviders(): Promise<EnabledOAuthProvider
   try {
     const response = await fetch('/api/auth/providers', { cache: 'no-store' });
     if (!response.ok) {
-      return { google: false, microsoft: false, adfs: false, saml: false };
+      return { google: false, microsoft: false, adfs: false, keycloak: false, saml: false };
     }
     const data = (await response.json()) as Partial<EnabledOAuthProviders>;
     return {
       google: Boolean(data.google),
       microsoft: Boolean(data.microsoft),
       adfs: Boolean(data.adfs),
+      keycloak: Boolean(data.keycloak),
       saml: Boolean(data.saml),
       googleLabel: typeof data.googleLabel === 'string' ? data.googleLabel : '',
       microsoftLabel: typeof data.microsoftLabel === 'string' ? data.microsoftLabel : '',
       adfsLabel: typeof data.adfsLabel === 'string' ? data.adfsLabel : '',
+      keycloakLabel: typeof data.keycloakLabel === 'string' ? data.keycloakLabel : '',
       samlLabel: typeof data.samlLabel === 'string' ? data.samlLabel : '',
     };
   } catch {
     return {
-      google: false, microsoft: false, adfs: false, saml: false,
-      googleLabel: '', microsoftLabel: '', adfsLabel: '', samlLabel: '',
+      google: false, microsoft: false, adfs: false, keycloak: false, saml: false,
+      googleLabel: '', microsoftLabel: '', adfsLabel: '', keycloakLabel: '', samlLabel: '',
     };
   }
 }
