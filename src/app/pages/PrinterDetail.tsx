@@ -32,6 +32,7 @@ import {
   ArrowDownToLine,
   ArrowUpFromLine,
   Pencil,
+  ScanLine,
   AlertCircle,
   Eye,
   EyeOff,
@@ -57,6 +58,8 @@ import {
   printerSupportsCoolingControl,
   printerSupportsFilamentControl,
   printerSupportsFilamentEdit,
+  printerSupportsRfidRefresh,
+  refreshPrinterFilamentTag,
   setPrinterFilament,
   FILAMENT_MATERIALS,
   FILAMENT_VENDORS,
@@ -939,7 +942,10 @@ export function PrinterDetail() {
       subType: '',
       color: spool.color || '#808080',
       isLoaded: true,
-      isInUse: printer.status === 'printing',
+      // The poller marks the slot the extruder is actually drawing from. Older
+      // poller builds don't send it, so fall back to the previous
+      // whole-printer approximation rather than showing nothing.
+      isInUse: spool.active ?? printer.status === 'printing',
       trayId,
       label: bambuSlotLabel(trayId),
       remaining: spool.remaining,
@@ -949,6 +955,10 @@ export function PrinterDetail() {
   const filamentSlots: FilamentSlot[] =
     taskConfigSlots.length > 0 ? taskConfigSlots : spoolSlots;
   const selectedSlot = filamentSlots.find((s) => s.slot === selectedFilamentSlot) ?? null;
+  // The AMS spins a spool past its reader to re-scan the tag, which it can only
+  // do with the filament retracted — so any loaded slot blocks the re-read.
+  const anyFilamentLoaded = filamentSlots.some((s) => s.isInUse);
+  const canRefreshRfid = canControlFilament && printerSupportsRfidRefresh(printer);
   const formattedTimeRemaining = formatMinutesAsHourDotMinute(printer.currentJob?.timeRemaining ?? 0);
   const formattedPrintingTime = formatMinutesAsHourDotMinute(printer.currentJob?.printingTime ?? 0);
 
@@ -1157,6 +1167,23 @@ export function PrinterDetail() {
       }
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Unable to control filament');
+    } finally {
+      setFilamentInFlight(null);
+    }
+  };
+
+  const handleRfidRefresh = async (slot: FilamentSlot) => {
+    if (slot.trayId === undefined || anyFilamentLoaded) {
+      return;
+    }
+
+    setFilamentInFlight(`rfid-${slot.slot}`);
+
+    try {
+      await refreshPrinterFilamentTag(printer, slot.trayId);
+      toast.success('Re-reading tag — updated details appear within a few seconds.');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Unable to re-read the tag');
     } finally {
       setFilamentInFlight(null);
     }
@@ -1848,7 +1875,35 @@ export function PrinterDetail() {
                           Edit
                         </Button>
                       )}
+                      {canRefreshRfid && (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          className={`h-8 gap-1 px-3 text-xs ${CONTROL_GLOW}`}
+                          disabled={
+                            !selectedSlot ||
+                            selectedSlot.trayId === undefined ||
+                            filamentControlsDisabled ||
+                            anyFilamentLoaded
+                          }
+                          onClick={() => selectedSlot && handleRfidRefresh(selectedSlot)}
+                        >
+                          <ScanLine className="size-3.5" />
+                          {selectedSlot && filamentInFlight === `rfid-${selectedSlot.slot}`
+                            ? '…'
+                            : 'Re-read tag'}
+                        </Button>
+                      )}
                     </div>
+                    {canRefreshRfid && anyFilamentLoaded && (
+                      // Without this the disabled button just looks broken —
+                      // the constraint is the AMS's, not a permissions problem.
+                      <p className="mt-2 text-xs text-muted-foreground">
+                        Unload filament before re-reading a tag — the AMS has to spin the spool
+                        past its reader.
+                      </p>
+                    )}
                   </div>
                 )}
               </>

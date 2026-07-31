@@ -699,6 +699,49 @@ export function printerSupportsCoolingControl(printer: Printer) {
   return (PRINTER_FANS[printer.profile]?.length ?? 0) > 0;
 }
 
+// Only Bambu's AMS has an RFID reader to re-trigger. Snapmaker's OpenRFID
+// spool identity is written onto the tag itself via the Filament Station's NFC
+// flow, so there is nothing to re-read on demand there.
+export function printerSupportsRfidRefresh(printer: Printer) {
+  return isBambuProfile(printer.profile);
+}
+
+// Ask the AMS to physically re-scan the RFID tag in one slot, for when the
+// initial read came back garbled. Requires the filament to be retracted — the
+// AMS has to spin the spool past its reader — so callers gate this on no slot
+// being active. The refreshed tag data arrives on the poller's next cycle.
+export async function refreshPrinterFilamentTag(printer: Printer, trayId: number) {
+  if (!printerSupportsRfidRefresh(printer)) {
+    throw new Error('RFID re-read is not available for this printer.');
+  }
+  if (!Number.isInteger(trayId) || trayId < 0 || trayId > 255) {
+    throw new Error('This slot cannot be targeted for an RFID re-read.');
+  }
+
+  const response = await fetch(`/api/printers/${encodeURIComponent(printer.id)}/command`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ command: 'refresh_rfid', trayId }),
+  });
+
+  if (!response.ok) {
+    let message = `RFID re-read failed with ${response.status}`;
+
+    try {
+      const payload = (await response.json()) as { error?: string };
+      if (payload.error) {
+        message = payload.error;
+      }
+    } catch {
+      // Ignore non-JSON proxy responses.
+    }
+
+    throw new Error(message);
+  }
+
+  logAuditEvent('printer.refreshRfid', printer.name, { trayId });
+}
+
 // Set a cooling fan's speed (0–100%). Snapmaker U1 (Klipper/Moonraker) runs an
 // M106/M107 gcode script over the proxy; Bambu has no HTTP API, so the server
 // publishes the M106 as an MQTT gcode_line. A percent of 0 turns the fan off.

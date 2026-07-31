@@ -5,7 +5,7 @@
     "semantic_hash": "e51077b6a7f1f67afc748f1a32a1557d"
   },
   ".claude/settings.local.json": {
-    "mtime": 1785487924.774897,
+    "mtime": 1785273089.6404207,
     "ast_hash": "5a53b56d066c66090a483ae0840f2b6a",
     "semantic_hash": "5a53b56d066c66090a483ae0840f2b6a"
   },
@@ -30,8 +30,8 @@
     "semantic_hash": ""
   },
   "go-services/cmd/poller/bambu.go": {
-    "mtime": 1785495836.670025,
-    "ast_hash": "6a3f3934eea93e7dfef7eb06ca5b3b96",
+    "mtime": 1785273089.5544221,
+    "ast_hash": "2fe2347c28c9130fc613ead8ab974ffa",
     "semantic_hash": ""
   },
   "go-services/cmd/poller/bambuftp.go": {
@@ -50,9 +50,9 @@
     "semantic_hash": "b5f164295277104b3508bd53116bc628"
   },
   "go-services/cmd/poller/helpers.go": {
-    "mtime": 1785495749.1510348,
-    "ast_hash": "db4e981ae04423c33de2e8ce4f35cc4a",
-    "semantic_hash": ""
+    "mtime": 1783695263.0750508,
+    "ast_hash": "3be8d87b609c7a409351c13b06ce9c2f",
+    "semantic_hash": "3be8d87b609c7a409351c13b06ce9c2f"
   },
   "go-services/cmd/poller/main.go": {
     "mtime": 1783695263.0754845,
@@ -345,8 +345,8 @@
     "semantic_hash": "27cf1e3591e961fcb8ee9033cd85bab4"
   },
   "server/app.js": {
-    "mtime": 1785321321.198551,
-    "ast_hash": "4b05eca8705171b125745653647c3587",
+    "mtime": 1785275553.819488,
+    "ast_hash": "0c75c803da93e4dcbdce1d645fc5fe79",
     "semantic_hash": ""
   },
   "server/bambuCamera.js": {
@@ -830,8 +830,8 @@
     "semantic_hash": "b3431d9d72010db94dcc91d1abbd8f48"
   },
   "src/app/lib/printerProfiles.ts": {
-    "mtime": 1785495921.3320158,
-    "ast_hash": "064f4bc33a1ff3cf44f187c4ba846ebf",
+    "mtime": 1783695263.3237953,
+    "ast_hash": "b6071b787985073c3d048c324dcc9e05",
     "semantic_hash": ""
   },
   "src/app/lib/printersApi.ts": {
@@ -945,8 +945,8 @@
     "semantic_hash": ""
   },
   "src/app/pages/PrinterDetail.tsx": {
-    "mtime": 1785495962.7860112,
-    "ast_hash": "66b7f4fd6125e0ea35239ad84cd1266f",
+    "mtime": 1783695263.3347952,
+    "ast_hash": "a06e2ff169c286d2b80577b0ef2a5c2b",
     "semantic_hash": ""
   },
   "src/app/pages/Queue.tsx": {
@@ -970,8 +970,8 @@
     "semantic_hash": ""
   },
   "src/app/types.ts": {
-    "mtime": 1785495868.3560216,
-    "ast_hash": "0d79be98d755537b4f6f7e0e9c51fbb4",
+    "mtime": 1783695263.3367953,
+    "ast_hash": "a29418d0bc776069b852f295c54d0a8a",
     "semantic_hash": ""
   },
   "src/main.tsx": {
@@ -990,13 +990,13 @@
     "semantic_hash": ""
   },
   "API.md": {
-    "mtime": 1785496009.475006,
-    "ast_hash": "c967e1deafc677506e9666bc8af9fead",
+    "mtime": 1785275391.2798302,
+    "ast_hash": "9b12e9994f8a78d5accf74e4fc00588a",
     "semantic_hash": ""
   },
   "CLAUDE.md": {
-    "mtime": 1785321275.2594573,
-    "ast_hash": "8c0fdd89771aa8f6f0715c5300e3ae2b",
+    "mtime": 1785275615.8475928,
+    "ast_hash": "0580c1abaa3d28b7c379b049ed0060cc",
     "semantic_hash": ""
   },
   "README.md": {
@@ -1025,8 +1025,8 @@
     "semantic_hash": ""
   },
   "docker-compose.yml": {
-    "mtime": 1785321065.0956676,
-    "ast_hash": "fb34df4e9d77da594b06c7f8b36d1697",
+    "mtime": 1785274689.5008364,
+    "ast_hash": "449ba7b9e72ab5c22435738ae3280241",
     "semantic_hash": ""
   },
   "exporter/requirements.txt": {
@@ -1145,8 +1145,8 @@
     "semantic_hash": ""
   },
   "go-services/cmd/poller/assignments.go": {
-    "mtime": 1785495776.8890316,
-    "ast_hash": "9a40b4bd7e88e0da5680d66c3837d34a",
+    "mtime": 1783695263.0687962,
+    "ast_hash": "613abe78c2670af6767c4001ff6a0211",
     "semantic_hash": ""
   },
   "go-services/cmd/poller/filament_matcher.go": {
@@ -1200,8 +1200,8 @@
     "semantic_hash": ""
   },
   "server/bambuCommands.js": {
-    "mtime": 1785495886.0110197,
-    "ast_hash": "d8916f37a494fc13501e865f0fc845c8",
+    "mtime": 1783695263.2864633,
+    "ast_hash": "d724b7c970e01e475aef6ac2a6955282",
     "semantic_hash": ""
   },
   "server/filamentStation.js": {
@@ -1350,8 +1350,8 @@
     "semantic_hash": ""
   },
   "firmware/status-light/README.md": {
-    "mtime": 1785321229.2252903,
-    "ast_hash": "decd1c03b64f53774ee557d11577b830",
+    "mtime": 1785273089.5537512,
+    "ast_hash": "bf013b5572d1b9ea838be4ae4278beaf",
     "semantic_hash": ""
   },
   "slicer-proxy/amsMapping.js": {
@@ -1480,8 +1480,8 @@
     "semantic_hash": ""
   },
   "server/statusLightBroker.js": {
-    "mtime": 1785321029.8343852,
-    "ast_hash": "60f25eae4f29e508e3edf63477e24fa6",
+    "mtime": 1785273089.5954213,
+    "ast_hash": "76a45deb012e81fbe228d310f1f51e15",
     "semantic_hash": ""
   },
   "server/tenantContext.js": {
@@ -1510,8 +1510,8 @@
     "semantic_hash": ""
   },
   "src/app/components/StatusLightFlashDialog.tsx": {
-    "mtime": 1785321142.7345893,
-    "ast_hash": "7864c34594172c16138f8073fd48a863",
+    "mtime": 1785273089.5964215,
+    "ast_hash": "41e6476d3cf8af4983fa9a175acb88f6",
     "semantic_hash": ""
   },
   "src/app/components/StatusLightSerialMonitor.tsx": {
@@ -1540,8 +1540,8 @@
     "semantic_hash": ""
   },
   "src/app/lib/statusLightApi.ts": {
-    "mtime": 1785321085.275258,
-    "ast_hash": "19a5aa016fbdbdd29a4fb12e2d727f62",
+    "mtime": 1785273089.5974214,
+    "ast_hash": "796d0e8d80c56ee4f6159dd86e1bfedf",
     "semantic_hash": ""
   },
   "src/app/lib/statusLightFirmwareSource.ts": {
@@ -1565,8 +1565,8 @@
     "semantic_hash": ""
   },
   "SECURITY_ARCHITECTURE.md": {
-    "mtime": 1785321326.950558,
-    "ast_hash": "f4c023cd56b01b0f80e4053d9b71ee16",
+    "mtime": 1785273089.552422,
+    "ast_hash": "cecea87b0aabdf7899b7ebca31a5ef02",
     "semantic_hash": ""
   },
   "db/tenancy/README.md": {
@@ -1592,16 +1592,6 @@
   ".github/workflows/rollback.yml": {
     "mtime": 1785274670.635101,
     "ast_hash": "1b141c4c64033c295fa08527e9b25d3b",
-    "semantic_hash": ""
-  },
-  "go-services/cmd/poller/bambumerge.go": {
-    "mtime": 1785495772.623032,
-    "ast_hash": "03f50a36cd727263e10d9bf857f19c56",
-    "semantic_hash": ""
-  },
-  "go-services/cmd/poller/bambumerge_test.go": {
-    "mtime": 1785495854.958023,
-    "ast_hash": "ab661f42ba6f364ea8b007af75f4fd7d",
     "semantic_hash": ""
   }
 }

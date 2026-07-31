@@ -254,6 +254,33 @@ export function buildBambuCommandPayload(command, params = {}, profile) {
     };
   }
 
+  if (command === 'refresh_rfid') {
+    // ams_get_rfid: ask the AMS to physically re-scan the tag in one slot,
+    // for when the initial read came back garbled or empty. `trayId` is the
+    // global tray id, split the same way set_filament splits it.
+    //
+    // Note Bambu names the slot field `slot_id` for this command, not
+    // `tray_id` as everywhere else (bambuddy bambu_mqtt.py:4716-4752).
+    //
+    // The printer can only spin a spool past the reader with the filament
+    // retracted, so this is a no-op while something is loaded. The caller is
+    // expected to have checked — the frontend gates the button on the poller's
+    // per-slot `active` flag — since MQTT gives us no way to find out here.
+    const target = Number(params.trayId);
+    if (!Number.isFinite(target) || target < 0 || target > 255) {
+      throw new Error('Filament tray target is out of range');
+    }
+    const isExternal = target === 254;
+    return {
+      print: {
+        command: 'ams_get_rfid',
+        ams_id: isExternal ? 255 : Math.floor(target / 4),
+        slot_id: isExternal ? 254 : target % 4,
+        sequence_id: sequenceId,
+      },
+    };
+  }
+
   const action = BAMBU_PRINT_ACTIONS[command];
   if (!action) {
     throw new Error(`Unsupported command: ${command}`);
@@ -273,7 +300,12 @@ export function sendBambuCommand(printer, command, params) {
     throw new Error('Bambu printer is missing its serial number');
   }
 
-  if (command === 'load_filament' || command === 'unload_filament' || command === 'set_filament') {
+  if (
+    command === 'load_filament' ||
+    command === 'unload_filament' ||
+    command === 'set_filament' ||
+    command === 'refresh_rfid'
+  ) {
     // Publishing is QoS 0 with no ack from the printer, so a successful publish
     // here does not prove the firmware applied it. Logging the exact payload
     // lets it be diffed against a packet capture of Bambu Studio's own command

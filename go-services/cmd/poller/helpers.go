@@ -3,6 +3,8 @@ package main
 import (
 	"hash/crc32"
 	"math"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -75,6 +77,35 @@ func mInt(m pmap, key string) int {
 		return int(round(f))
 	}
 	return 0
+}
+
+// mIndex reads an integer that firmware may send as either a number or a
+// decimal string. Bambu quotes most AMS scalars — `ams[].id` and `tray[].id`
+// arrive as "0", "1", … — so plain mInt silently yields 0 for every one of
+// them and collapses distinct slots onto the same key. Use this for any field
+// used as an identifier or array index.
+func mIndex(m pmap, key string) (int, bool) {
+	raw := mGet(m, key)
+	if raw == nil {
+		return 0, false
+	}
+	if f, ok := asFloat(raw); ok {
+		return int(round(f)), true
+	}
+	if s, ok := raw.(string); ok {
+		if n, err := strconv.Atoi(strings.TrimSpace(s)); err == nil {
+			return n, true
+		}
+	}
+	return 0, false
+}
+
+// mIndexDef is mIndex with a fallback for the absent/unparseable case.
+func mIndexDef(m pmap, key string, def int) int {
+	if n, ok := mIndex(m, key); ok {
+		return n
+	}
+	return def
 }
 
 func mMap(m pmap, key string) pmap {

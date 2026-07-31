@@ -110,7 +110,9 @@ func detectBambuAssignmentTriggers(ctx context.Context, conn *pgx.Conn, printerI
 
 		trayType := mStr(tray, "tray_type")
 		trayColor := trayColorHex(tray)
-		state := mInt(tray, "state")
+		// mIndex, not mInt — firmware may quote this scalar, and a string would
+		// read as 0 (not one of the empty codes) and look loaded regardless.
+		state := mIndexDef(tray, "state", 0)
 
 		if a.pendingConfig && a.fingerprintType == "" {
 			// Deferred assignment (slot was empty when assigned) — fire the
