@@ -65,11 +65,9 @@ import {
   saveBrandingSettings,
   DEFAULT_SITE_NAME,
 } from '../lib/settingsApi';
-import { OAuthProviderSettings } from '../components/OAuthProviderSettings';
+import { KeycloakSsoSettings } from '../components/KeycloakSsoSettings';
 import { HomeAssistantSettings } from '../components/HomeAssistantSettings';
 import { StatusLightSettings } from '../components/StatusLightSettings';
-import { SamlSsoSettings } from '../components/SamlSsoSettings';
-import { fetchEnabledOAuthProviders } from '../lib/oauthApi';
 import {
   fetchPublicViewerSetting,
   savePublicViewerSetting,
@@ -146,9 +144,6 @@ export function Settings() {
   const [copiedKey, setCopiedKey] = useState(false);
   const [managerRequests, setManagerRequests] = useState<ManagerRequest[]>([]);
   const [actioningManagerId, setActioningManagerId] = useState<string | null>(null);
-  // Which SSO provider's config form to show. Only one provider is configured at
-  // a time — the admin picks before the form appears.
-  const [ssoProvider, setSsoProvider] = useState<'google' | 'microsoft' | 'adfs' | 'saml'>('google');
   // Website access mode: whether an unauthenticated visitor can view the
   // dashboard read-only, or is sent to the login screen.
   const [publicViewerEnabled, setPublicViewerEnabled] = useState(true);
@@ -202,21 +197,6 @@ export function Settings() {
       .then(setManagerRequests)
       .catch(() => {
         toast.error('Unable to load manager requests.');
-      });
-
-    // Open the Sign-in tab on whichever SSO provider is currently active.
-    fetchEnabledOAuthProviders()
-      .then((providers) => {
-        if (providers.saml && !providers.google && !providers.microsoft && !providers.adfs) {
-          setSsoProvider('saml');
-        } else if (providers.adfs && !providers.google && !providers.microsoft) {
-          setSsoProvider('adfs');
-        } else if (providers.microsoft && !providers.google) {
-          setSsoProvider('microsoft');
-        }
-      })
-      .catch(() => {
-        /* non-fatal — defaults to Google */
       });
 
     fetchPublicViewerSetting()
@@ -2233,75 +2213,7 @@ export function Settings() {
               </form>
             </Card>
 
-            <Card className="p-6">
-              <div className="space-y-2">
-                <Label htmlFor="sso-provider">Single sign-on provider</Label>
-                <p className="text-sm text-muted-foreground">
-                  Choose which provider to configure. Each provider has its own
-                  enable toggle and they can be turned on independently — the login
-                  screen shows a button for every enabled provider.
-                </p>
-                <Select
-                  value={ssoProvider}
-                  onValueChange={(value) => setSsoProvider(value as 'google' | 'microsoft' | 'adfs' | 'saml')}
-                  disabled={user?.role !== 'admin'}
-                >
-                  <SelectTrigger id="sso-provider" className="w-full sm:w-72">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="google">Google</SelectItem>
-                    <SelectItem value="microsoft">Microsoft</SelectItem>
-                    <SelectItem value="adfs">ADFS</SelectItem>
-                    <SelectItem value="saml">SAML 2.0</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </Card>
-
-            {ssoProvider === 'google' && (
-              <OAuthProviderSettings
-                provider="google"
-                label="Google"
-                showDisplayName
-                disabled={user?.role !== 'admin'}
-                clientIdPlaceholder="xxxxxxxx.apps.googleusercontent.com"
-                setupHint={<>Create an OAuth client in the Google Cloud console.</>}
-              />
-            )}
-            {ssoProvider === 'microsoft' && (
-              <OAuthProviderSettings
-                provider="microsoft"
-                label="Microsoft"
-                showTenant
-                showDisplayName
-                disabled={user?.role !== 'admin'}
-                clientIdPlaceholder="Application (client) ID"
-                setupHint={
-                  <>Register an app in the Azure portal (Entra ID → App registrations)
-                  and add a client secret — or point it at an on-prem AD FS server
-                  with the authority URL below.</>
-                }
-              />
-            )}
-            {ssoProvider === 'adfs' && (
-              <OAuthProviderSettings
-                provider="adfs"
-                label="ADFS"
-                showAuthority
-                showDisplayName
-                disabled={user?.role !== 'admin'}
-                setupHint={
-                  <>
-                    Satit-M Chula AD FS — enter the Client ID, Secret, authority
-                    URL, and the redirect URI exactly as registered with the IdP.
-                  </>
-                }
-              />
-            )}
-            {ssoProvider === 'saml' && (
-              <SamlSsoSettings disabled={user?.role !== 'admin'} />
-            )}
+            <KeycloakSsoSettings disabled={user?.role !== 'admin'} />
           </div>
         </TabsContent>
       </Tabs>

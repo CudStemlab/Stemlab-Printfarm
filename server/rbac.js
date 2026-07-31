@@ -39,7 +39,7 @@ export const CAP = Object.freeze({
   FILAMENT_WRITE: 'filament:write',
   FILAMENT_ADMIN: 'filament:admin', // delete, kiosk system command
   NOTIFICATIONS_ADMIN: 'notifications:admin', // Discord webhook CRUD (secret URLs)
-  SETTINGS_ADMIN: 'settings:admin', // app settings, SAML/SSO, HA, backups, updates
+  SETTINGS_ADMIN: 'settings:admin', // app settings, OAuth/SSO, HA, backups, updates
   USERS_ADMIN: 'users:admin', // staff accounts, manager requests
   KEYS_ADMIN: 'keys:admin', // API/slicer keys
   AUDIT_READ: 'audit:read',
@@ -142,7 +142,6 @@ const PUBLIC_MUTATIONS = new Set([
   'POST /api/auth/login',
   'POST /api/auth/logout',
   'POST /api/auth/verify',
-  'POST /api/auth/saml/acs',
   'POST /api/slicer-grant/verify',
   'POST /api/admin/credential/verify',
   'POST /api/users/verify',
@@ -170,7 +169,6 @@ function sensitiveReadCapability(p) {
   if (p.startsWith('/api/notifications/')) return CAP.NOTIFICATIONS_ADMIN;
   if (p === '/api/manager/requests') return CAP.USERS_ADMIN;
   if (p.startsWith('/api/manager/requests/') && !p.endsWith('/status')) return CAP.USERS_ADMIN;
-  if (p === '/api/settings/saml') return CAP.SETTINGS_ADMIN;
   if (p.startsWith('/api/settings/home-assistant')) return CAP.SETTINGS_ADMIN;
   // The printer callback URL is the SERVER's own LAN address (e.g.
   // http://192.168.x.x:8080) that H2 printers call back to — an infrastructure
@@ -227,7 +225,6 @@ function adminMutationCapability(method, p) {
   if (p.startsWith('/api/admin/update/runs/') && p.endsWith('/cancel') && method === 'POST') return CAP.SETTINGS_ADMIN;
   if (p === '/api/admin/backup/restore' && method === 'POST') return CAP.SETTINGS_ADMIN;
   if (p.startsWith('/api/notifications/')) return CAP.NOTIFICATIONS_ADMIN;
-  if (p === '/api/settings/saml' || p === '/api/settings/saml/test') return CAP.SETTINGS_ADMIN;
   if (p.startsWith('/api/settings/') && method !== 'GET') return CAP.SETTINGS_ADMIN;
   if (p === '/api/analytics/daily/reset') return CAP.ANALYTICS_ADMIN;
   if (p === '/api/queue/reset') return CAP.QUEUE_ADMIN;

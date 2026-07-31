@@ -22,7 +22,7 @@ const RESTRICTED_WRITE_RESOURCES = new Set([
   'users', // create/delete staff accounts / set passwords — backdoor accounts
   'admin-credential', // reset the admin password — account takeover
   'manager-requests', // approve → mints a printfarm_manage key
-  'settings', // change SAML/SSO/security config — auth tamper
+  'settings', // change OAuth/SSO/security config — auth tamper
   'notifications', // create/delete Discord webhooks — data-exfiltration channel
 ]);
 

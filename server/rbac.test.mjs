@@ -65,7 +65,6 @@ t('sensitive reads resolve to their admin capability', () => {
   assert.equal(requiredCapability('GET', '/api/users'), CAP.USERS_ADMIN);
   assert.equal(requiredCapability('GET', '/api/slicer-keys'), CAP.KEYS_ADMIN);
   assert.equal(requiredCapability('GET', '/api/audit-logs'), CAP.AUDIT_READ);
-  assert.equal(requiredCapability('GET', '/api/settings/saml'), CAP.SETTINGS_ADMIN);
 });
 t('queue file read is operator-tier', () => {
   assert.equal(requiredCapability('GET', '/api/queue/j1/file'), CAP.QUEUE_FILES_READ);
@@ -148,7 +147,7 @@ t('operator: control yes, admin no', () => {
 });
 t('admin: everything', () => {
   for (const [m, p] of [['POST', '/api/users'], ['DELETE', '/api/printers/p1'],
-    ['PUT', '/api/settings/saml'], ['POST', '/api/slicer-keys'], ['POST', '/api/totally-unknown']]) {
+    ['PUT', '/api/settings/oauth/keycloak'], ['POST', '/api/slicer-keys'], ['POST', '/api/totally-unknown']]) {
     assert.equal(decide(ROLE.ADMIN, m, p), 'allow', `admin ${m} ${p}`);
   }
 });

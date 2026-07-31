@@ -1,9 +1,9 @@
 import { logAuditEvent } from './auditApi';
 
 // Admin override for the site's own public origin (Settings → Sign-in). Used as
-// the top-priority tier when the server builds OAuth redirect_uri / SAML
-// spEntityId+acsUrl — see resolvePublicOrigin() in server/app.js. Backed by the
-// app_settings key `sso_public_url`.
+// the top-priority tier when the server builds the OAuth redirect_uri — see
+// resolvePublicOrigin() in server/app.js. Backed by the app_settings key
+// `sso_public_url`.
 export interface SsoPublicUrlSetting {
   publicUrl: string;
   // The current APP_BASE_URL env var, read-only — the fallback tier used when
