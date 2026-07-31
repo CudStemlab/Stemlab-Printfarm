@@ -107,9 +107,9 @@ services:
       # Public origin used to build the OAuth redirect_uri when no admin
       # override is set in Settings → Sign-in ("SSO public URL", which
       # takes precedence over this). Set this to the site's public HTTPS URL
-      # (e.g. https://sso.stemlabs2.work) so SSO callbacks use the right address
-      # even when nginx doesn't forward the host. Leave empty to fall back to
-      # auto-detection from X-Forwarded-Proto / Host headers.
+      # (e.g. https://printfarm.example.com) so SSO callbacks use the right
+      # address even when nginx doesn't forward the host. Leave empty to fall
+      # back to auto-detection from X-Forwarded-Proto / Host headers.
       APP_BASE_URL: ${APP_BASE_URL:-}
       # Mark the login session cookie Secure (set true once served over HTTPS).
       SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}
