@@ -1509,6 +1509,35 @@ export function PrinterDetail() {
             {printer.model}
           </p>
         </div>
+        {/* Emergency stop lives in the page header, not the job-control card: it
+            is a firmware halt rather than a job action, so it stays reachable
+            without scrolling and whether or not a print is running. */}
+        {canControlPrinter && printerSupportsEmergencyStop(printer) && (
+          <div className="flex items-center gap-2">
+            {(estopped || printer.status === 'error') && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={firmwareRestartInFlight}
+                onClick={handleFirmwareRestart}
+              >
+                <RotateCcw className="size-4 mr-2" />
+                {firmwareRestartInFlight ? 'Restarting...' : 'Restart Firmware'}
+              </Button>
+            )}
+            <Button
+              type="button"
+              variant="destructive"
+              size="sm"
+              disabled={estopInFlight}
+              onClick={() => setEstopConfirmOpen(true)}
+            >
+              <OctagonAlert className="size-4 mr-2" />
+              {estopInFlight ? 'Stopping...' : 'E-Stop'}
+            </Button>
+          </div>
+        )}
         {user?.role === 'admin' && (
           <div className="flex items-center gap-2">
             {isLayoutEditing && (
@@ -1788,38 +1817,6 @@ export function PrinterDetail() {
               <p className="pt-4 text-sm text-muted-foreground">
                 Viewer accounts can monitor jobs but cannot pause, resume, or cancel them.
               </p>
-            )}
-
-            {/* Emergency stop sits outside the job-control row on purpose: it is
-                a firmware halt, not a job action, so it stays available whether
-                or not a print is running (a runaway heater doesn't need a job). */}
-            {canControlPrinter && printerSupportsEmergencyStop(printer) && (
-              <div className="mt-4 space-y-3 rounded-lg border border-destructive/40 p-4">
-                <Button
-                  variant="destructive"
-                  className="w-full"
-                  disabled={estopInFlight}
-                  onClick={() => setEstopConfirmOpen(true)}
-                >
-                  <OctagonAlert className="size-4 mr-2" />
-                  {estopInFlight ? 'Stopping...' : 'Emergency Stop'}
-                </Button>
-                <p className="text-sm text-muted-foreground">
-                  Halts the printer immediately — heaters and motors off, mid-move. The print is
-                  lost and the printer stays down until the firmware is restarted.
-                </p>
-                {(estopped || printer.status === 'error') && (
-                  <Button
-                    variant="outline"
-                    className="w-full"
-                    disabled={firmwareRestartInFlight}
-                    onClick={handleFirmwareRestart}
-                  >
-                    <RotateCcw className="size-4 mr-2" />
-                    {firmwareRestartInFlight ? 'Restarting...' : 'Restart Firmware'}
-                  </Button>
-                )}
-              </div>
             )}
           </div>
         </Card>
