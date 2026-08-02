@@ -392,6 +392,7 @@ export function PrinterDetail() {
   // `calibrationInFlight` is the running routine's id. There is no completion
   // signal from either firmware, so `calibrationClearTimer` re-enables the card
   // after the routine's estimated duration — see runCalibration.
+  const [isCalibrationOpen, setIsCalibrationOpen] = useState(false);
   const [pendingCalibration, setPendingCalibration] = useState<CalibrationRoutine | null>(null);
   const [calibrationInFlight, setCalibrationInFlight] = useState<string | null>(null);
   const [calibrationStartedAt, setCalibrationStartedAt] = useState<number | null>(null);
@@ -1538,6 +1539,18 @@ export function PrinterDetail() {
             </Button>
           </div>
         )}
+        {canCalibrate && (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className={CONTROL_GLOW}
+            onClick={() => setIsCalibrationOpen(true)}
+          >
+            <SlidersHorizontal className="size-4 mr-2" />
+            Calibrate
+          </Button>
+        )}
         {user?.role === 'admin' && (
           <div className="flex items-center gap-2">
             {isLayoutEditing && (
@@ -2344,91 +2357,6 @@ export function PrinterDetail() {
               </div>
             </Card>
           ) : null,
-          calibration: canCalibrate ? (
-            <Card className="p-6">
-              <h2 className="text-xl font-semibold mb-4 flex items-center gap-2">
-                <SlidersHorizontal className="size-5" />
-                Calibration
-              </h2>
-              <div className="space-y-4">
-                <div className="grid gap-2">
-                  {calibrationRoutines.map((routine) => {
-                    // A routine whose Klipper object is missing would be
-                    // rejected on click; disable it rather than let the
-                    // operator find out the hard way. When discovery didn't
-                    // run (calibrationObjects === null) everything stays live.
-                    const unsupported = Boolean(
-                      routine.requiresObject &&
-                        calibrationObjects &&
-                        !calibrationObjects.has(routine.requiresObject),
-                    );
-
-                    return (
-                      <Button
-                        key={routine.id}
-                        type="button"
-                        variant="outline"
-                        className={`${CONTROL_GLOW} justify-between`}
-                        disabled={calibrationControlsDisabled || unsupported}
-                        onClick={() => setPendingCalibration(routine)}
-                      >
-                        <span>
-                          {calibrationInFlight === routine.id ? `${routine.label}…` : routine.label}
-                        </span>
-                        <span className="text-xs text-muted-foreground">
-                          {unsupported ? 'Not available' : `~${routine.estimatedMinutes} min`}
-                        </span>
-                      </Button>
-                    );
-                  })}
-                </div>
-
-                {calibrationInFlight && calibrationStartedAt && (
-                  <p className="text-sm text-muted-foreground">
-                    Started{' '}
-                    {new Date(calibrationStartedAt).toLocaleTimeString([], {
-                      hour: '2-digit',
-                      minute: '2-digit',
-                    })}
-                    . The printer doesn’t report calibration progress — watch the machine or the
-                    camera.
-                  </p>
-                )}
-
-                {/* Bambu reports no currentJob while calibrating, so the Current
-                    Job card's Cancel button is absent — this is the only stop. */}
-                {isBambuProfile(printer.profile) && calibrationInFlight && (
-                  <Button
-                    type="button"
-                    variant="destructive"
-                    className="w-full"
-                    onClick={handleStopCalibration}
-                  >
-                    <Square className="size-4 mr-2" />
-                    Stop calibration
-                  </Button>
-                )}
-
-                {!isCalibrationReady && !isOnline && (
-                  <p className="text-sm text-muted-foreground">
-                    Connect the printer to calibrate it.
-                  </p>
-                )}
-                {!isCalibrationReady && isOnline && (
-                  <p className="text-sm text-muted-foreground">
-                    The printer must be idle to start a calibration.
-                  </p>
-                )}
-
-                {printer.profile === 'snapmaker_u1' && (
-                  <p className="text-xs text-muted-foreground">
-                    Results last until the next restart. Run SAVE_CONFIG from the printer’s own
-                    screen to keep them.
-                  </p>
-                )}
-              </div>
-            </Card>
-          ) : null,
           information: (
           <Card className="p-6">
             <h2 className="text-xl font-semibold mb-4">Information</h2>
@@ -2558,8 +2486,99 @@ export function PrinterDetail() {
         }}
       />
 
-      {/* Lives outside PrinterCardLayout: a dialog rendered inside a sortable
-          card gets dragged along with it. */}
+      <Dialog open={isCalibrationOpen} onOpenChange={setIsCalibrationOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <SlidersHorizontal className="size-5" />
+              Calibration
+            </DialogTitle>
+            <DialogDescription>
+              Runs {printer.name}’s own calibration routines. The printer is unusable while one
+              runs.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div className="grid gap-2">
+              {calibrationRoutines.map((routine) => {
+                // A routine whose Klipper object is missing would be rejected on
+                // click; disable it rather than let the operator find out the
+                // hard way. When discovery didn't run (calibrationObjects ===
+                // null) everything stays live.
+                const unsupported = Boolean(
+                  routine.requiresObject &&
+                    calibrationObjects &&
+                    !calibrationObjects.has(routine.requiresObject),
+                );
+
+                return (
+                  <Button
+                    key={routine.id}
+                    type="button"
+                    variant="outline"
+                    className={`${CONTROL_GLOW} justify-between`}
+                    disabled={calibrationControlsDisabled || unsupported}
+                    onClick={() => setPendingCalibration(routine)}
+                  >
+                    <span>
+                      {calibrationInFlight === routine.id ? `${routine.label}…` : routine.label}
+                    </span>
+                    <span className="text-xs text-muted-foreground">
+                      {unsupported ? 'Not available' : `~${routine.estimatedMinutes} min`}
+                    </span>
+                  </Button>
+                );
+              })}
+            </div>
+
+            {calibrationInFlight && calibrationStartedAt && (
+              <p className="text-sm text-muted-foreground">
+                Started{' '}
+                {new Date(calibrationStartedAt).toLocaleTimeString([], {
+                  hour: '2-digit',
+                  minute: '2-digit',
+                })}
+                . The printer doesn’t report calibration progress — watch the machine or the camera.
+              </p>
+            )}
+
+            {/* Bambu reports no currentJob while calibrating, so the Current Job
+                card's Cancel button is absent — this is the only stop. */}
+            {isBambuProfile(printer.profile) && calibrationInFlight && (
+              <Button
+                type="button"
+                variant="destructive"
+                className="w-full"
+                onClick={handleStopCalibration}
+              >
+                <Square className="size-4 mr-2" />
+                Stop calibration
+              </Button>
+            )}
+
+            {!isCalibrationReady && !isOnline && (
+              <p className="text-sm text-muted-foreground">Connect the printer to calibrate it.</p>
+            )}
+            {!isCalibrationReady && isOnline && (
+              <p className="text-sm text-muted-foreground">
+                The printer must be idle to start a calibration.
+              </p>
+            )}
+
+            {printer.profile === 'snapmaker_u1' && (
+              <p className="text-xs text-muted-foreground">
+                Results last until the next restart. Run SAVE_CONFIG from the printer’s own screen
+                to keep them.
+              </p>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Stacked on top of the calibration dialog rather than nested inside it:
+          Radix layers the two portals, and the list stays visible behind the
+          confirmation. */}
       <AlertDialog
         open={pendingCalibration !== null}
         onOpenChange={(open) => {
