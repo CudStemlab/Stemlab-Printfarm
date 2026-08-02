@@ -643,6 +643,59 @@ export async function sendPrinterCommand(
   logAuditEvent('printer.command', printer.name, { command });
 }
 
+// A real emergency stop is a firmware-level halt, not a print cancel: Klipper's
+// `emergency_stop` shuts the MCU down immediately — heaters off, steppers off,
+// mid-move — and the printer stays down until a firmware restart. Only the
+// Moonraker profile exposes one. Bambu's LAN MQTT API has no equivalent (its
+// `stop` is the same graceful cancel the Cancel button already sends), so the
+// button is hidden there rather than pretending a cancel is an e-stop.
+export function printerSupportsEmergencyStop(printer: Printer) {
+  return printer.profile === 'snapmaker_u1';
+}
+
+// Halt the printer at the firmware level. Klipper enters a shutdown state that
+// only `firmware_restart` clears, so the caller is expected to confirm first and
+// to surface the recovery action afterwards.
+export async function sendPrinterEmergencyStop(printer: Printer) {
+  if (!printerSupportsEmergencyStop(printer)) {
+    throw new Error('Emergency stop is not available for this printer.');
+  }
+
+  const response = await fetch(
+    `/__printer_proxy/${encodeURIComponent(printer.id)}/printer/emergency_stop`,
+    { method: 'POST' },
+  );
+
+  if (!response.ok) {
+    throw new Error(
+      await printerErrorMessage(response, `Emergency stop failed with ${response.status}`),
+    );
+  }
+
+  logAuditEvent('printer.command', printer.name, { command: 'emergency_stop' });
+}
+
+// Clear the shutdown state left by an emergency stop. Klipper restarts its host
+// process and re-homes nothing — the operator still has to home before printing.
+export async function sendPrinterFirmwareRestart(printer: Printer) {
+  if (!printerSupportsEmergencyStop(printer)) {
+    throw new Error('Firmware restart is not available for this printer.');
+  }
+
+  const response = await fetch(
+    `/__printer_proxy/${encodeURIComponent(printer.id)}/printer/firmware_restart`,
+    { method: 'POST' },
+  );
+
+  if (!response.ok) {
+    throw new Error(
+      await printerErrorMessage(response, `Firmware restart failed with ${response.status}`),
+    );
+  }
+
+  logAuditEvent('printer.command', printer.name, { command: 'firmware_restart' });
+}
+
 export function printerSupportsLight(printer: Printer) {
   return printer.profile === 'snapmaker_u1' || isBambuProfile(printer.profile);
 }
