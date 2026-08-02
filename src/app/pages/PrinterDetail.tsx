@@ -1149,6 +1149,8 @@ export function PrinterDetail() {
 
   const handleHomeAll = () => runMotionCommand('home', () => homePrinterAxes(printer, 'all'));
 
+  const handleHomeZ = () => runMotionCommand('home-z', () => homePrinterAxes(printer, 'z'));
+
   const handleDisableMotors = () =>
     runMotionCommand('disable', () => disablePrinterMotors(printer));
 
@@ -2096,21 +2098,44 @@ export function PrinterDetail() {
                       >
                         <ArrowDown className="size-5" />
                       </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="icon"
+                        className={CONTROL_GLOW}
+                        disabled={motionControlsDisabled}
+                        onClick={handleHomeZ}
+                        aria-label="Home Z axis"
+                      >
+                        <Home className="size-5" />
+                      </Button>
                     </div>
                     <div className="mt-2 text-center text-xs text-muted-foreground">Z</div>
                   </div>
                 </div>
 
-                <Button
-                  type="button"
-                  variant="outline"
-                  className={`w-full ${CONTROL_GLOW}`}
-                  disabled={motionControlsDisabled}
-                  onClick={handleDisableMotors}
-                >
-                  <Power className="size-4 mr-2" />
-                  {motionInFlight === 'disable' ? 'Disabling…' : 'Disable motors'}
-                </Button>
+                <div className="grid grid-cols-2 gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className={CONTROL_GLOW}
+                    disabled={motionControlsDisabled}
+                    onClick={handleHomeAll}
+                  >
+                    <Home className="size-4 mr-2" />
+                    {motionInFlight === 'home' ? 'Homing…' : 'Home all'}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className={CONTROL_GLOW}
+                    disabled={motionControlsDisabled}
+                    onClick={handleDisableMotors}
+                  >
+                    <Power className="size-4 mr-2" />
+                    {motionInFlight === 'disable' ? 'Disabling…' : 'Disable motors'}
+                  </Button>
+                </div>
 
                 {!isMotionReady && !isOnline && (
                   <p className="text-sm text-muted-foreground">
