@@ -36,9 +36,14 @@ import {
   AlertCircle,
   Eye,
   EyeOff,
+  SlidersHorizontal,
 } from 'lucide-react';
 import {
   MOTION_STEP_OPTIONS,
+  PRINTER_CALIBRATIONS,
+  fetchPrinterCalibrationObjects,
+  printerSupportsCalibration,
+  runPrinterCalibration,
   buildPrinterWebcamPlayerUrl,
   buildPrinterWebcamMjpegUrl,
   buildPrinterWebcamSnapshotUrl,
@@ -74,6 +79,7 @@ import {
   setPrinterLight,
   setPrinterTemperature,
   unloadPrinterFilament,
+  type CalibrationRoutine,
   type FanDescriptor,
   type MotionAxis,
 } from '../lib/printerProfiles';
@@ -97,6 +103,16 @@ import {
   DialogHeader,
   DialogTitle,
 } from '../components/ui/dialog';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '../components/ui/alert-dialog';
 import { toast } from 'sonner';
 import { fetchPrinter, removePrinter, savePrinter } from '../lib/printersApi';
 import { useAuth } from '../contexts/AuthContext';
@@ -357,6 +373,17 @@ export function PrinterDetail() {
   // in-flight key (e.g. "x+", "home") disables the pad while a command runs.
   const [motionStep, setMotionStep] = useState<number>(10);
   const [motionInFlight, setMotionInFlight] = useState<string | null>(null);
+  // Calibration. `pendingCalibration` holds the routine awaiting confirmation;
+  // `calibrationInFlight` is the running routine's id. There is no completion
+  // signal from either firmware, so `calibrationClearTimer` re-enables the card
+  // after the routine's estimated duration — see runCalibration.
+  const [pendingCalibration, setPendingCalibration] = useState<CalibrationRoutine | null>(null);
+  const [calibrationInFlight, setCalibrationInFlight] = useState<string | null>(null);
+  const [calibrationStartedAt, setCalibrationStartedAt] = useState<number | null>(null);
+  const calibrationClearTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Klipper objects this firmware defines, used to disable calibration buttons
+  // whose macro isn't present. null = discovery unavailable, treat all as valid.
+  const [calibrationObjects, setCalibrationObjects] = useState<Set<string> | null>(null);
   // Keyed "load-<slot>"/"unload-<slot>" while a filament command is in flight.
   const [filamentInFlight, setFilamentInFlight] = useState<string | null>(null);
   // The filament slot the user has selected (its 1-based `slot`). Load/Unload/Edit
@@ -836,6 +863,36 @@ export function PrinterDetail() {
     }
   }, [printer?.profile, printer?.airFilterOn]);
 
+  // Ask Klipper which objects it defines so calibration buttons whose macro is
+  // absent from this firmware render disabled instead of failing on click. Only
+  // Snapmaker answers; everything else resolves null and every routine stays
+  // enabled. Re-run when the printer comes back online — discovery fails while
+  // it's unreachable.
+  useEffect(() => {
+    if (!printer) {
+      return;
+    }
+    let cancelled = false;
+    void fetchPrinterCalibrationObjects(printer).then((objects) => {
+      if (!cancelled) {
+        setCalibrationObjects(objects);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [printer?.id, printer?.profile, printer?.status === 'offline']);
+
+  // Don't leave the in-flight timer running after a navigation away.
+  useEffect(
+    () => () => {
+      if (calibrationClearTimer.current) {
+        clearTimeout(calibrationClearTimer.current);
+      }
+    },
+    [],
+  );
+
   if (!printer) {
     return (
       <div className="p-6">
@@ -902,6 +959,14 @@ export function PrinterDetail() {
   const canControlMotion = canControlPrinter && printerSupportsMotionControl(printer);
   const isMotionReady = canControlMotion && isOnline && printer.status === 'idle';
   const motionControlsDisabled = !isMotionReady || motionInFlight !== null;
+  // Calibration drives the toolhead and heats the bed, so it takes the same
+  // connected-and-idle gate as motion. Deliberately NOT gated on currentJob: a
+  // Bambu running a calibration reports no job, and that must not read as
+  // "nothing is happening".
+  const calibrationRoutines = PRINTER_CALIBRATIONS[printer.profile] ?? [];
+  const canCalibrate = canControlPrinter && printerSupportsCalibration(printer);
+  const isCalibrationReady = canCalibrate && isOnline && printer.status === 'idle';
+  const calibrationControlsDisabled = !isCalibrationReady || calibrationInFlight !== null;
   // Loading/unloading mid-print would ruin the job, so filament swaps are only
   // live when the printer is connected and idle, mirroring the motion gate.
   const canControlFilament = canControlPrinter && printerSupportsFilamentControl(printer);
@@ -1153,6 +1218,53 @@ export function PrinterDetail() {
 
   const handleDisableMotors = () =>
     runMotionCommand('disable', () => disablePrinterMotors(printer));
+
+  // Start a calibration routine the operator already confirmed. Neither firmware
+  // reports calibration progress: Bambu flips to `printing` (so the poller
+  // re-disables the card on its own), but Snapmaker stays `standby` for the
+  // whole run, so we hold the in-flight state for the routine's estimated
+  // duration. That estimate is the one thing this card approximates — the toast
+  // tells the operator to watch the machine rather than the dashboard.
+  const runCalibration = async (routine: CalibrationRoutine) => {
+    if (!isCalibrationReady) {
+      return;
+    }
+
+    setCalibrationInFlight(routine.id);
+
+    try {
+      await runPrinterCalibration(printer, routine);
+      setCalibrationStartedAt(Date.now());
+      toast.success(
+        `${routine.label} started — watch the printer or the camera; this can take up to ${routine.estimatedMinutes} minutes.`,
+      );
+      if (calibrationClearTimer.current) {
+        clearTimeout(calibrationClearTimer.current);
+      }
+      calibrationClearTimer.current = setTimeout(
+        () => setCalibrationInFlight(null),
+        routine.estimatedMinutes * 60_000,
+      );
+    } catch (error) {
+      setCalibrationInFlight(null);
+      toast.error(error instanceof Error ? error.message : 'Unable to start calibration');
+    }
+  };
+
+  // Bambu reports no currentJob while calibrating, so the Current Job card's
+  // Cancel button doesn't render — this is the only way to abort from the
+  // dashboard. Snapmaker gets no equivalent: only M112 stops a running Klipper
+  // script, and that halts the MCU until someone runs FIRMWARE_RESTART.
+  const handleStopCalibration = async () => {
+    try {
+      await sendPrinterCommand(printer, 'cancel');
+      setCalibrationInFlight(null);
+      setCalibrationStartedAt(null);
+      toast.success('Calibration stop sent.');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Unable to stop calibration');
+    }
+  };
 
   const handleFilamentAction = async (action: 'load' | 'unload', slot: FilamentSlot) => {
     if (!isFilamentReady) {
@@ -2145,6 +2257,91 @@ export function PrinterDetail() {
               </div>
             </Card>
           ) : null,
+          calibration: canCalibrate ? (
+            <Card className="p-6">
+              <h2 className="text-xl font-semibold mb-4 flex items-center gap-2">
+                <SlidersHorizontal className="size-5" />
+                Calibration
+              </h2>
+              <div className="space-y-4">
+                <div className="grid gap-2">
+                  {calibrationRoutines.map((routine) => {
+                    // A routine whose Klipper object is missing would be
+                    // rejected on click; disable it rather than let the
+                    // operator find out the hard way. When discovery didn't
+                    // run (calibrationObjects === null) everything stays live.
+                    const unsupported = Boolean(
+                      routine.requiresObject &&
+                        calibrationObjects &&
+                        !calibrationObjects.has(routine.requiresObject),
+                    );
+
+                    return (
+                      <Button
+                        key={routine.id}
+                        type="button"
+                        variant="outline"
+                        className={`${CONTROL_GLOW} justify-between`}
+                        disabled={calibrationControlsDisabled || unsupported}
+                        onClick={() => setPendingCalibration(routine)}
+                      >
+                        <span>
+                          {calibrationInFlight === routine.id ? `${routine.label}…` : routine.label}
+                        </span>
+                        <span className="text-xs text-muted-foreground">
+                          {unsupported ? 'Not available' : `~${routine.estimatedMinutes} min`}
+                        </span>
+                      </Button>
+                    );
+                  })}
+                </div>
+
+                {calibrationInFlight && calibrationStartedAt && (
+                  <p className="text-sm text-muted-foreground">
+                    Started{' '}
+                    {new Date(calibrationStartedAt).toLocaleTimeString([], {
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    })}
+                    . The printer doesn’t report calibration progress — watch the machine or the
+                    camera.
+                  </p>
+                )}
+
+                {/* Bambu reports no currentJob while calibrating, so the Current
+                    Job card's Cancel button is absent — this is the only stop. */}
+                {isBambuProfile(printer.profile) && calibrationInFlight && (
+                  <Button
+                    type="button"
+                    variant="destructive"
+                    className="w-full"
+                    onClick={handleStopCalibration}
+                  >
+                    <Square className="size-4 mr-2" />
+                    Stop calibration
+                  </Button>
+                )}
+
+                {!isCalibrationReady && !isOnline && (
+                  <p className="text-sm text-muted-foreground">
+                    Connect the printer to calibrate it.
+                  </p>
+                )}
+                {!isCalibrationReady && isOnline && (
+                  <p className="text-sm text-muted-foreground">
+                    The printer must be idle to start a calibration.
+                  </p>
+                )}
+
+                {printer.profile === 'snapmaker_u1' && (
+                  <p className="text-xs text-muted-foreground">
+                    Results last until the next restart. Run SAVE_CONFIG from the printer’s own
+                    screen to keep them.
+                  </p>
+                )}
+              </div>
+            </Card>
+          ) : null,
           information: (
           <Card className="p-6">
             <h2 className="text-xl font-semibold mb-4">Information</h2>
@@ -2273,6 +2470,44 @@ export function PrinterDetail() {
           ),
         }}
       />
+
+      {/* Lives outside PrinterCardLayout: a dialog rendered inside a sortable
+          card gets dragged along with it. */}
+      <AlertDialog
+        open={pendingCalibration !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setPendingCalibration(null);
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Start {pendingCalibration?.label.toLowerCase()}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {pendingCalibration?.description} Takes up to {pendingCalibration?.estimatedMinutes}{' '}
+              minutes, and the printer can’t be used until it finishes.
+              {printer.profile === 'snapmaker_u1'
+                ? ' It cannot be stopped from the dashboard once started.'
+                : ''}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                const routine = pendingCalibration;
+                setPendingCalibration(null);
+                if (routine) {
+                  void runCalibration(routine);
+                }
+              }}
+            >
+              Start calibration
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {user?.role === 'admin' && editDraft && (
         <Dialog open={isEditOpen} onOpenChange={setIsEditOpen}>

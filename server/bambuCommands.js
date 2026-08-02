@@ -35,6 +35,24 @@ const BAMBU_FILAMENT_PRESETS = {
   PVA: { idx: 'GFS99', type: 'PVA', min: 190, max: 220 },
 };
 
+// Bambu's built-in calibration routines are a single MQTT `calibration`
+// command whose `option` field is a bitmask of which routines to run
+// (pybambu / OpenBambuAPI: bit1 bed level, bit2 vibration compensation,
+// bit3 motor noise cancellation; bit0 unused). Only these named routines are
+// accepted — the caller never supplies the raw integer, so a stale or hostile
+// client can't set an undocumented bit.
+//
+// The bit meanings are documented for the A1/P1 series and have NOT been
+// verified against the H2 series on this farm — like BAMBU_FILAMENT_PRESETS
+// above, they may need per-model tuning. H2D dual-nozzle offset calibration is
+// deliberately absent: it is a different command, not a bit here.
+const BAMBU_CALIBRATION_OPTIONS = {
+  bed_level: 1 << 1, // 2
+  vibration: 1 << 2, // 4
+  motor_noise: 1 << 3, // 8
+  full: (1 << 1) | (1 << 2) | (1 << 3), // 14
+};
+
 // Map a heater target to the M-code Bambu accepts over `gcode_line`.
 function buildBambuTemperatureGcode(heater, target, nozzleIndex = 0) {
   const value = Math.round(Number(target));
@@ -159,6 +177,24 @@ export function buildBambuCommandPayload(command, params = {}, profile) {
       print: {
         command: 'gcode_line',
         param: `M106 P${port} S${speed}\n`,
+        sequence_id: sequenceId,
+      },
+    };
+  }
+
+  if (command === 'calibrate') {
+    const routine = String(params.routine || '');
+    // hasOwn, not a bare lookup: `__proto__`/`toString` resolve off the
+    // prototype chain and would sail past an `=== undefined` check, publishing
+    // a calibration command with a garbage `option` to the printer.
+    if (!Object.hasOwn(BAMBU_CALIBRATION_OPTIONS, routine)) {
+      throw new Error(`Unsupported calibration routine: ${params.routine}`);
+    }
+    const option = BAMBU_CALIBRATION_OPTIONS[routine];
+    return {
+      print: {
+        command: 'calibration',
+        option,
         sequence_id: sequenceId,
       },
     };

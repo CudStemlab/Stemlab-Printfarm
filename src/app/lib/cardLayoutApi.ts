@@ -8,6 +8,7 @@ export type CardId =
   | 'currentJob'
   | 'temperature'
   | 'motion'
+  | 'calibration'
   | 'cooling'
   | 'filament'
   | 'information';
@@ -19,6 +20,7 @@ export const CARD_IDS: CardId[] = [
   'currentJob',
   'temperature',
   'motion',
+  'calibration',
   'cooling',
   'filament',
   'information',
@@ -28,6 +30,7 @@ export const CARD_LABELS: Record<CardId, string> = {
   currentJob: 'Current Job',
   temperature: 'Temperature',
   motion: 'Motion Control',
+  calibration: 'Calibration',
   cooling: 'Cooling',
   filament: 'Current Filament',
   information: 'Information',
@@ -35,7 +38,7 @@ export const CARD_LABELS: Record<CardId, string> = {
 
 export const DEFAULT_CARD_LAYOUT: CardLayout = [
   ['currentJob'],
-  ['temperature', 'motion', 'cooling', 'filament'],
+  ['temperature', 'motion', 'calibration', 'cooling', 'filament'],
   ['information'],
 ];
 

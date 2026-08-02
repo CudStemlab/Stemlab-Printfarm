@@ -3067,11 +3067,12 @@ async function handleDataApiPrinters(req, res, { apiKey, method, id, sub, action
       type,
       color,
       vendor,
+      routine,
     } = await readJsonBody(req);
     await sendBambuCommand(printer, command, {
-      heater, target, nozzleIndex, gcode, trayId, fanPort, speed, modeId, submode, type, color, vendor,
+      heater, target, nozzleIndex, gcode, trayId, fanPort, speed, modeId, submode, type, color, vendor, routine,
     });
-    auditDataApi(req, apiKey, 'printer.command', id, { command });
+    auditDataApi(req, apiKey, 'printer.command', id, { command, routine });
     sendEmpty(res);
     return true;
   }
@@ -4062,6 +4063,7 @@ async function handleApi(req, res, requestUrl) {
       type,
       color,
       vendor,
+      routine,
     } = await readJsonBody(req);
     await sendBambuCommand(printer, command, {
       heater,
@@ -4076,6 +4078,7 @@ async function handleApi(req, res, requestUrl) {
       type,
       color,
       vendor,
+      routine,
     });
     // Optimistic write so the displayed target reflects what was just sent —
     // see setPrinterTemperatureTarget's comment for why this is needed
