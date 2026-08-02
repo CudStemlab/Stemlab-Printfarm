@@ -925,8 +925,8 @@
     "semantic_hash": ""
   },
   "src/app/pages/PrinterDetail.tsx": {
-    "mtime": 1785664741.3142,
-    "ast_hash": "5c1d1c3f19aa1b2256f9fde9bcd85522",
+    "mtime": 1785665174.3396645,
+    "ast_hash": "e1ca3da0aadefa6935bc0e58fb096e13",
     "semantic_hash": ""
   },
   "src/app/pages/Queue.tsx": {

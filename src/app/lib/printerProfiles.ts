@@ -653,6 +653,67 @@ export function printerSupportsEmergencyStop(printer: Printer) {
   return printer.profile === 'snapmaker_u1';
 }
 
+// Run a Moonraker control call, falling back to the equivalent G-code when the
+// firmware doesn't implement the dedicated endpoint. The Snapmaker U1's
+// Moonraker-*compatible* firmware only serves the subset this app already uses
+// (objects/query, print/*, gcode/script) and answers 404 — "Not Found" — for the
+// rest, so the endpoint alone isn't enough. The gcode/script route is the one
+// every other control here rides on, so the fallback works wherever they do.
+//
+// Both of these commands take the firmware down as they run, so the printer may
+// answer with its shutdown notice rather than an ok. That is the command
+// working, not failing: `acceptedErrorPattern` matches the replies that mean
+// "done" so a successful halt isn't reported to the operator as an error.
+async function postMoonrakerControl(
+  printer: Printer,
+  {
+    endpoint,
+    script,
+    acceptedErrorPattern,
+    failureMessage,
+  }: {
+    endpoint: string;
+    script: string;
+    acceptedErrorPattern: RegExp;
+    failureMessage: string;
+  },
+) {
+  const post = (path: string) =>
+    fetch(`/__printer_proxy/${encodeURIComponent(printer.id)}${path}`, { method: 'POST' });
+
+  let response: Response;
+  try {
+    response = await post(endpoint);
+  } catch {
+    // The connection dropping mid-call is itself a plausible outcome here — the
+    // firmware can go down before it answers — so retry via the script route
+    // rather than failing outright.
+    response = await post(`/printer/gcode/script?script=${encodeURIComponent(script)}`);
+  }
+
+  let usedScript = false;
+  if (response.status === 404) {
+    usedScript = true;
+    response = await post(`/printer/gcode/script?script=${encodeURIComponent(script)}`);
+  }
+
+  if (!response.ok) {
+    const message = await printerErrorMessage(response, '');
+    if (acceptedErrorPattern.test(message)) {
+      return;
+    }
+    // A 404 on the fallback too means neither route exists on this firmware —
+    // say so, because the bare "Not Found" the printer returns reads like the
+    // printer itself is missing.
+    if (usedScript && response.status === 404) {
+      throw new Error(
+        `${failureMessage}: this printer's firmware has neither ${endpoint} nor a ${script} G-code route.`,
+      );
+    }
+    throw new Error(message || `${failureMessage} (HTTP ${response.status})`);
+  }
+}
+
 // Halt the printer at the firmware level. Klipper enters a shutdown state that
 // only `firmware_restart` clears, so the caller is expected to confirm first and
 // to surface the recovery action afterwards.
@@ -661,16 +722,14 @@ export async function sendPrinterEmergencyStop(printer: Printer) {
     throw new Error('Emergency stop is not available for this printer.');
   }
 
-  const response = await fetch(
-    `/__printer_proxy/${encodeURIComponent(printer.id)}/printer/emergency_stop`,
-    { method: 'POST' },
-  );
-
-  if (!response.ok) {
-    throw new Error(
-      await printerErrorMessage(response, `Emergency stop failed with ${response.status}`),
-    );
-  }
+  await postMoonrakerControl(printer, {
+    endpoint: '/printer/emergency_stop',
+    // M112 is Klipper's emergency-shutdown G-code — the same halt the endpoint
+    // triggers, reachable on firmware that doesn't expose the endpoint.
+    script: 'M112',
+    acceptedErrorPattern: /shutdown|emergency|M112/i,
+    failureMessage: 'Emergency stop failed',
+  });
 
   logAuditEvent('printer.command', printer.name, { command: 'emergency_stop' });
 }
@@ -682,16 +741,12 @@ export async function sendPrinterFirmwareRestart(printer: Printer) {
     throw new Error('Firmware restart is not available for this printer.');
   }
 
-  const response = await fetch(
-    `/__printer_proxy/${encodeURIComponent(printer.id)}/printer/firmware_restart`,
-    { method: 'POST' },
-  );
-
-  if (!response.ok) {
-    throw new Error(
-      await printerErrorMessage(response, `Firmware restart failed with ${response.status}`),
-    );
-  }
+  await postMoonrakerControl(printer, {
+    endpoint: '/printer/firmware_restart',
+    script: 'FIRMWARE_RESTART',
+    acceptedErrorPattern: /restart|shutdown/i,
+    failureMessage: 'Firmware restart failed',
+  });
 
   logAuditEvent('printer.command', printer.name, { command: 'firmware_restart' });
 }
