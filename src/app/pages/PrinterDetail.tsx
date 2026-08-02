@@ -37,6 +37,8 @@ import {
   Eye,
   EyeOff,
   SlidersHorizontal,
+  OctagonAlert,
+  RotateCcw,
 } from 'lucide-react';
 import {
   MOTION_STEP_OPTIONS,
@@ -72,8 +74,11 @@ import {
   printerSupportsLiveMjpeg,
   printerSupportsMotionControl,
   printerSupportsTemperatureControl,
+  printerSupportsEmergencyStop,
   printerSupportsWebcamStream,
   sendPrinterCommand,
+  sendPrinterEmergencyStop,
+  sendPrinterFirmwareRestart,
   setPrinterAirFilter,
   setPrinterFanSpeed,
   setPrinterLight,
@@ -344,6 +349,16 @@ export function PrinterDetail() {
   const { user } = useAuth();
   const [printer, setPrinter] = useState<Printer | null>(null);
   const [commandInFlight, setCommandInFlight] = useState<'pause' | 'resume' | 'cancel' | null>(null);
+  // Emergency stop is confirm-gated (it halts the firmware, not just the job) and
+  // tracked apart from commandInFlight so it stays clickable while a pause or
+  // cancel is still in flight — an e-stop must never wait on a graceful command.
+  const [estopConfirmOpen, setEstopConfirmOpen] = useState(false);
+  const [estopInFlight, setEstopInFlight] = useState(false);
+  // Set once an e-stop lands so the recovery (firmware restart) button appears
+  // even if the poller hasn't reported the shutdown state yet. Cleared on a
+  // successful restart.
+  const [estopped, setEstopped] = useState(false);
+  const [firmwareRestartInFlight, setFirmwareRestartInFlight] = useState(false);
   // Snapmaker reports its cavity LED via Moonraker, so the displayed state is
   // synced from the hardware below. Bambu has no HTTP readback, so for it this
   // just tracks the last command sent.
@@ -1082,6 +1097,49 @@ export function PrinterDetail() {
     }
   };
 
+  const handleEmergencyStop = async () => {
+    if (!canControlPrinter) {
+      toast.error('You do not have permission to control this printer.');
+      return;
+    }
+
+    setEstopInFlight(true);
+
+    try {
+      await sendPrinterEmergencyStop(printer);
+      setEstopped(true);
+      // The firmware is down: no job is running and nothing is heating. Reflect
+      // that immediately rather than waiting a poll cycle.
+      setPrinter((prev) =>
+        prev ? { ...prev, status: 'error', currentJob: undefined, progress: 0 } : prev,
+      );
+      toast.success('Emergency stop sent. The printer is halted until a firmware restart.');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Unable to send the emergency stop');
+    } finally {
+      setEstopInFlight(false);
+    }
+  };
+
+  const handleFirmwareRestart = async () => {
+    if (!canControlPrinter) {
+      toast.error('You do not have permission to control this printer.');
+      return;
+    }
+
+    setFirmwareRestartInFlight(true);
+
+    try {
+      await sendPrinterFirmwareRestart(printer);
+      setEstopped(false);
+      toast.success('Firmware restart sent. Home the axes before printing again.');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Unable to restart the firmware');
+    } finally {
+      setFirmwareRestartInFlight(false);
+    }
+  };
+
   const handleToggleLight = async (next: boolean) => {
     if (!canControlPrinter || !printer) {
       return;
@@ -1730,6 +1788,38 @@ export function PrinterDetail() {
               <p className="pt-4 text-sm text-muted-foreground">
                 Viewer accounts can monitor jobs but cannot pause, resume, or cancel them.
               </p>
+            )}
+
+            {/* Emergency stop sits outside the job-control row on purpose: it is
+                a firmware halt, not a job action, so it stays available whether
+                or not a print is running (a runaway heater doesn't need a job). */}
+            {canControlPrinter && printerSupportsEmergencyStop(printer) && (
+              <div className="mt-4 space-y-3 rounded-lg border border-destructive/40 p-4">
+                <Button
+                  variant="destructive"
+                  className="w-full"
+                  disabled={estopInFlight}
+                  onClick={() => setEstopConfirmOpen(true)}
+                >
+                  <OctagonAlert className="size-4 mr-2" />
+                  {estopInFlight ? 'Stopping...' : 'Emergency Stop'}
+                </Button>
+                <p className="text-sm text-muted-foreground">
+                  Halts the printer immediately — heaters and motors off, mid-move. The print is
+                  lost and the printer stays down until the firmware is restarted.
+                </p>
+                {(estopped || printer.status === 'error') && (
+                  <Button
+                    variant="outline"
+                    className="w-full"
+                    disabled={firmwareRestartInFlight}
+                    onClick={handleFirmwareRestart}
+                  >
+                    <RotateCcw className="size-4 mr-2" />
+                    {firmwareRestartInFlight ? 'Restarting...' : 'Restart Firmware'}
+                  </Button>
+                )}
+              </div>
             )}
           </div>
         </Card>
@@ -2504,6 +2594,32 @@ export function PrinterDetail() {
               }}
             >
               Start calibration
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={estopConfirmOpen} onOpenChange={setEstopConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Emergency stop {printer.name}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This halts the printer's firmware at once — heaters and motors are cut mid-move, so
+              any running print is lost and filament may be left in the hotend. The printer stays
+              shut down until you restart its firmware and re-home it. Use Cancel instead to stop a
+              print cleanly.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Back</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-white hover:bg-destructive/90 dark:bg-destructive/60"
+              onClick={() => {
+                setEstopConfirmOpen(false);
+                void handleEmergencyStop();
+              }}
+            >
+              Emergency stop
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
