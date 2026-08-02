@@ -113,7 +113,7 @@ Lists the available resources.
 | `GET /printers/:id` | Fetch one printer; `404` if not found. |
 | `POST /printers` | Create or update a printer. Body must include `id`. Returns the saved record. |
 | `DELETE /printers/:id` | Delete a printer. |
-| `POST /printers/:id/command` | Send a **Bambu** MQTT command (pause/resume/cancel, temps, fans, etc.). |
+| `POST /printers/:id/command` | Send a **Bambu** MQTT command (pause/resume/cancel, temps, fans, calibration, etc.). |
 | `ANY /printers/:id/proxy/<path…>` | Raw HTTP passthrough to the printer's hardware API (e.g. Moonraker on a Snapmaker U1) — for **non-Bambu** control parity. |
 | `GET /printers/:id/camera/snapshot` | A single JPEG frame from the printer's webcam. |
 | `GET /printers/:id/camera/stream` | Live MJPEG stream where supported, else a single JPEG. |
@@ -155,7 +155,30 @@ accrued hours aren't overwritten.
 { "command": "pause" }
 ```
 Other accepted fields: `heater`, `target`, `nozzleIndex`, `gcode`, `trayId`,
-`fanPort`, `speed`, `modeId`, `submode`, `type`, `color`, `vendor`.
+`fanPort`, `speed`, `modeId`, `submode`, `type`, `color`, `vendor`, `routine`.
+
+**`calibrate`** — run the printer's own built-in calibration. Bambu only.
+
+```json
+{ "command": "calibrate", "routine": "bed_level" }
+```
+
+`routine` is one of `bed_level`, `vibration` (vibration compensation),
+`motor_noise` (motor noise cancellation), or `full` (all three, in the printer's
+own order). Any other value returns an error. The server maps the name to the
+bitmask Bambu's `calibration` command expects — the raw integer is deliberately
+**not** accepted from callers, so an undocumented bit can't be set.
+
+The bit meanings are documented for the A1/P1 series and are not verified on the
+H2 series; H2D dual-nozzle offset calibration is a separate command and is not
+exposed here. There is **no completion signal** — the printer reports `printing`
+with no `currentJob` while calibrating, and returns to `idle` when done. Abort
+with `{ "command": "cancel" }`.
+
+Non-Bambu printers calibrate through the hardware proxy instead, e.g.
+`POST /printers/:id/proxy/printer/gcode/script?script=BED_MESH_CALIBRATE` on a
+Snapmaker U1. Moonraker does not respond to that call until the routine
+*finishes*, so expect the request to hold for minutes.
 
 **`refresh_rfid`** — ask the AMS to physically re-scan the RFID tag in one slot,
 for when the initial read came back garbled or empty. Bambu only.

@@ -1068,6 +1068,209 @@ export async function disablePrinterMotors(printer: Printer) {
   await sendMotionGcode(printer, 'M84');
 }
 
+export interface CalibrationRoutine {
+  /** Stable id — also the Bambu `routine` name and the audit-log value. */
+  id: string;
+  label: string;
+  /** Shown in the confirmation dialog: what the printer physically does. */
+  description: string;
+  /**
+   * Rough upper bound in minutes. Shown in the dialog, and used to keep the
+   * card's in-flight state up on profiles that never report a status change.
+   */
+  estimatedMinutes: number;
+  /** Klipper command to run (Snapmaker only; Bambu routines go over MQTT). */
+  gcode?: string;
+  /**
+   * Printer object whose presence proves `gcode` is registered on this
+   * firmware — Klipper only defines BED_MESH_CALIBRATE when [bed_mesh] is
+   * configured. Used to disable a button we know would be rejected.
+   */
+  requiresObject?: string;
+}
+
+// Bambu exposes its calibration routines as one MQTT command with a bitmask of
+// which to run; the browser sends only these names and the server owns the
+// bits (see BAMBU_CALIBRATION_OPTIONS in server/bambuCommands.js). The routines
+// are documented for the A1/P1 series and are NOT verified on the H2 series —
+// confirm on one machine before trusting the card across the farm.
+const BAMBU_CALIBRATIONS: CalibrationRoutine[] = [
+  {
+    id: 'bed_level',
+    label: 'Bed level',
+    description:
+      'Probes the bed and rebuilds the height map. The nozzle heats and touches the plate at several points.',
+    estimatedMinutes: 5,
+  },
+  {
+    id: 'vibration',
+    label: 'Vibration compensation',
+    description:
+      'Sweeps the toolhead to measure resonance and retune input shaping. The printer moves fast and is loud.',
+    estimatedMinutes: 5,
+  },
+  {
+    id: 'motor_noise',
+    label: 'Motor noise cancellation',
+    description:
+      'Profiles the stepper drivers to reduce running noise. The axes move through their full travel.',
+    estimatedMinutes: 3,
+  },
+  {
+    id: 'full',
+    label: 'Full calibration',
+    description:
+      'Runs bed level, vibration compensation and motor noise cancellation in the printer’s own order, sharing one heat-up.',
+    estimatedMinutes: 12,
+  },
+];
+
+// Calibration routines the printer runs itself, per profile. Generic printers
+// have none, so the detail page hides the card entirely.
+//
+// SAVE_CONFIG is deliberately absent from the Snapmaker list: it rewrites
+// printer.cfg and restarts Klipper, which is too blunt to trigger from a shared
+// dashboard. Operators persist results from the printer's own screen.
+export const PRINTER_CALIBRATIONS: Partial<Record<PrinterProfile, CalibrationRoutine[]>> = {
+  snapmaker_u1: [
+    {
+      id: 'bed_mesh',
+      label: 'Bed mesh',
+      description:
+        'Runs BED_MESH_CALIBRATE: probes a grid across the plate and rebuilds the mesh. Homes first.',
+      estimatedMinutes: 8,
+      gcode: 'BED_MESH_CALIBRATE',
+      requiresObject: 'bed_mesh',
+    },
+    {
+      id: 'shaper',
+      label: 'Input shaper',
+      description:
+        'Runs SHAPER_CALIBRATE: sweeps each axis to measure resonance. The printer moves fast and is loud.',
+      estimatedMinutes: 6,
+      gcode: 'SHAPER_CALIBRATE',
+      requiresObject: 'resonance_tester',
+    },
+    {
+      id: 'probe',
+      label: 'Probe offset',
+      description:
+        'Runs PROBE_CALIBRATE: measures the probe’s Z offset against the nozzle. Needs someone at the printer to finish the paper test.',
+      estimatedMinutes: 3,
+      gcode: 'PROBE_CALIBRATE',
+      requiresObject: 'probe',
+    },
+    {
+      id: 'z_tilt',
+      label: 'Gantry level',
+      description: 'Runs Z_TILT_ADJUST: probes and squares the gantry against the bed.',
+      estimatedMinutes: 3,
+      gcode: 'Z_TILT_ADJUST',
+      requiresObject: 'z_tilt',
+    },
+  ],
+  bambulab_a1_mini: BAMBU_CALIBRATIONS,
+  bambulab_h2s: BAMBU_CALIBRATIONS,
+  bambulab_h2d: BAMBU_CALIBRATIONS,
+  bambulab_h2c: BAMBU_CALIBRATIONS,
+};
+
+export function printerSupportsCalibration(printer: Printer) {
+  return (PRINTER_CALIBRATIONS[printer.profile]?.length ?? 0) > 0;
+}
+
+// Ask Moonraker which objects this firmware actually defines, so we can disable
+// a calibration button rather than let the operator trigger a guaranteed
+// "Unknown command". Returns null when discovery isn't possible (non-Klipper
+// profile, printer offline, older Moonraker) — callers then treat every routine
+// as available and let the printer's own rejection surface as a toast, which
+// beats a permanently dead card.
+export async function fetchPrinterCalibrationObjects(
+  printer: Printer,
+): Promise<Set<string> | null> {
+  if (printer.profile !== 'snapmaker_u1') {
+    return null;
+  }
+
+  try {
+    const response = await fetch(
+      `/__printer_proxy/${encodeURIComponent(printer.id)}/printer/objects/list`,
+      { signal: AbortSignal.timeout(8000) },
+    );
+    if (!response.ok) {
+      return null;
+    }
+    const payload = (await response.json()) as { result?: { objects?: unknown } };
+    const objects = payload.result?.objects;
+    if (!Array.isArray(objects)) {
+      return null;
+    }
+    return new Set(objects.filter((entry): entry is string => typeof entry === 'string'));
+  } catch {
+    return null;
+  }
+}
+
+// How long we wait for the printer to acknowledge a calibration start before
+// assuming it's underway. Moonraker's /printer/gcode/script does not respond
+// until the script *finishes*, which for a bed mesh is many minutes, so we
+// can't wait for the real response. Klipper rejects parse and precondition
+// errors (unknown command, unhomed axes, missing probe) immediately and before
+// any motion, so this window catches every failure worth reporting; anything
+// slower means the routine started. Aborting our fetch does not stop the
+// printer, and does not cancel the server's upstream request.
+const CALIBRATION_START_TIMEOUT_MS = 20000;
+
+// Start a calibration routine. Bambu goes over MQTT as a named command whose
+// bitmask the server owns; Snapmaker runs the routine's literal Klipper command
+// through the Moonraker proxy. Only strings from PRINTER_CALIBRATIONS are ever
+// interpolated into the script query — the proxy is a raw passthrough, so
+// anything placed there executes on the printer.
+export async function runPrinterCalibration(printer: Printer, routine: CalibrationRoutine) {
+  if (!printerSupportsCalibration(printer)) {
+    throw new Error('Calibration is not available for this printer.');
+  }
+
+  let response: Response;
+  if (isBambuProfile(printer.profile)) {
+    response = await fetch(`/api/printers/${encodeURIComponent(printer.id)}/command`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ command: 'calibrate', routine: routine.id }),
+    });
+  } else if (printer.profile === 'snapmaker_u1') {
+    if (!routine.gcode) {
+      throw new Error('Calibration is not available for this printer.');
+    }
+    try {
+      response = await fetch(
+        `/__printer_proxy/${encodeURIComponent(printer.id)}/printer/gcode/script?script=${encodeURIComponent(routine.gcode)}`,
+        { method: 'POST', signal: AbortSignal.timeout(CALIBRATION_START_TIMEOUT_MS) },
+      );
+    } catch (error) {
+      // Only a timeout means "still running, so it started". A transport
+      // failure (printer unplugged, proxy down) throws a TypeError instead and
+      // must surface as an error — reporting an unreachable printer as
+      // "calibrating" would be worse than useless.
+      if (!(error instanceof Error) || error.name !== 'TimeoutError') {
+        throw new Error('Could not reach the printer to start calibration.');
+      }
+      logAuditEvent('printer.calibration', printer.name, { routine: routine.id });
+      return;
+    }
+  } else {
+    throw new Error('Calibration is not available for this printer.');
+  }
+
+  if (!response.ok) {
+    throw new Error(
+      await printerErrorMessage(response, `Calibration failed with ${response.status}`),
+    );
+  }
+
+  logAuditEvent('printer.calibration', printer.name, { routine: routine.id });
+}
+
 export function buildPrinterWebcamUrl(printer: Printer) {
   return `/__printer_webcam/${printer.id}/player`;
 }
