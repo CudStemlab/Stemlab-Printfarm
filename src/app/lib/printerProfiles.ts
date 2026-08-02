@@ -591,6 +591,32 @@ export async function fetchPrinterLiveStatus(printer: Printer): Promise<Partial<
   };
 }
 
+// Pull an operator-readable message out of a failed printer response. Our own
+// endpoints answer `{ error: "..." }`, but Moonraker answers
+// `{ error: { code, message, traceback } }` — reading `.error` blindly yields
+// "[object Object]" instead of the reason the printer actually refused (e.g.
+// "Must home X and Y axes first"). The traceback is dropped: it is Klipper
+// internals, not something an operator can act on.
+async function printerErrorMessage(response: Response, fallback: string) {
+  try {
+    const payload = (await response.json()) as { error?: unknown };
+    const { error } = payload;
+    if (typeof error === 'string' && error.trim()) {
+      return error;
+    }
+    if (error && typeof error === 'object') {
+      const nested = (error as { message?: unknown }).message;
+      if (typeof nested === 'string' && nested.trim()) {
+        return nested;
+      }
+    }
+  } catch {
+    // Ignore non-JSON proxy responses.
+  }
+
+  return fallback;
+}
+
 export async function sendPrinterCommand(
   printer: Printer,
   command: 'pause' | 'resume' | 'cancel'
@@ -609,18 +635,9 @@ export async function sendPrinterCommand(
         });
 
   if (!response.ok) {
-    let message = `Printer command failed with ${response.status}`;
-
-    try {
-      const payload = (await response.json()) as { error?: string };
-      if (payload.error) {
-        message = payload.error;
-      }
-    } catch {
-      // Ignore non-JSON proxy responses.
-    }
-
-    throw new Error(message);
+    throw new Error(
+      await printerErrorMessage(response, `Printer command failed with ${response.status}`),
+    );
   }
 
   logAuditEvent('printer.command', printer.name, { command });
@@ -678,18 +695,9 @@ export async function setPrinterTemperature(
   }
 
   if (!response.ok) {
-    let message = `Temperature command failed with ${response.status}`;
-
-    try {
-      const payload = (await response.json()) as { error?: string };
-      if (payload.error) {
-        message = payload.error;
-      }
-    } catch {
-      // Ignore non-JSON proxy responses.
-    }
-
-    throw new Error(message);
+    throw new Error(
+      await printerErrorMessage(response, `Temperature command failed with ${response.status}`),
+    );
   }
 
   logAuditEvent('printer.temperature', printer.name, { heater, target: value, nozzleIndex });
@@ -725,18 +733,9 @@ export async function refreshPrinterFilamentTag(printer: Printer, trayId: number
   });
 
   if (!response.ok) {
-    let message = `RFID re-read failed with ${response.status}`;
-
-    try {
-      const payload = (await response.json()) as { error?: string };
-      if (payload.error) {
-        message = payload.error;
-      }
-    } catch {
-      // Ignore non-JSON proxy responses.
-    }
-
-    throw new Error(message);
+    throw new Error(
+      await printerErrorMessage(response, `RFID re-read failed with ${response.status}`),
+    );
   }
 
   logAuditEvent('printer.refreshRfid', printer.name, { trayId });
@@ -775,18 +774,9 @@ export async function setPrinterFanSpeed(
   }
 
   if (!response.ok) {
-    let message = `Fan command failed with ${response.status}`;
-
-    try {
-      const payload = (await response.json()) as { error?: string };
-      if (payload.error) {
-        message = payload.error;
-      }
-    } catch {
-      // Ignore non-JSON proxy responses.
-    }
-
-    throw new Error(message);
+    throw new Error(
+      await printerErrorMessage(response, `Fan command failed with ${response.status}`),
+    );
   }
 
   logAuditEvent('printer.fan', printer.name, { fan: fan.id, percent: clamped });
@@ -826,18 +816,9 @@ export async function setPrinterAirFilter(printer: Printer, on: boolean) {
   });
 
   if (!response.ok) {
-    let message = `Air filter command failed with ${response.status}`;
-
-    try {
-      const payload = (await response.json()) as { error?: string };
-      if (payload.error) {
-        message = payload.error;
-      }
-    } catch {
-      // Ignore non-JSON proxy responses.
-    }
-
-    throw new Error(message);
+    throw new Error(
+      await printerErrorMessage(response, `Air filter command failed with ${response.status}`),
+    );
   }
 
   logAuditEvent('printer.airFilter', printer.name, { on });
@@ -868,18 +849,9 @@ export async function setPrinterLight(printer: Printer, on: boolean) {
   }
 
   if (!response.ok) {
-    let message = `Light command failed with ${response.status}`;
-
-    try {
-      const payload = (await response.json()) as { error?: string };
-      if (payload.error) {
-        message = payload.error;
-      }
-    } catch {
-      // Ignore non-JSON proxy responses.
-    }
-
-    throw new Error(message);
+    throw new Error(
+      await printerErrorMessage(response, `Light command failed with ${response.status}`),
+    );
   }
 
   logAuditEvent('printer.light', printer.name, { on });
@@ -926,18 +898,9 @@ async function sendFilamentCommand(
   }
 
   if (!response.ok) {
-    let message = `Filament command failed with ${response.status}`;
-
-    try {
-      const payload = (await response.json()) as { error?: string };
-      if (payload.error) {
-        message = payload.error;
-      }
-    } catch {
-      // Ignore non-JSON proxy responses.
-    }
-
-    throw new Error(message);
+    throw new Error(
+      await printerErrorMessage(response, `Filament command failed with ${response.status}`),
+    );
   }
 
   logAuditEvent('printer.filament', printer.name, { action, slot, trayId });
@@ -1024,16 +987,9 @@ export async function setPrinterFilament(
   }
 
   if (!response.ok) {
-    let message = `Filament command failed with ${response.status}`;
-    try {
-      const payload = (await response.json()) as { error?: string };
-      if (payload.error) {
-        message = payload.error;
-      }
-    } catch {
-      // Ignore non-JSON proxy responses.
-    }
-    throw new Error(message);
+    throw new Error(
+      await printerErrorMessage(response, `Filament command failed with ${response.status}`),
+    );
   }
 
   logAuditEvent('printer.filament', printer.name, { action: 'edit', slot, trayId, ...settings });
@@ -1085,18 +1041,9 @@ async function sendMotionGcode(printer: Printer, gcode: string) {
   }
 
   if (!response.ok) {
-    let message = `Motion command failed with ${response.status}`;
-
-    try {
-      const payload = (await response.json()) as { error?: string };
-      if (payload.error) {
-        message = payload.error;
-      }
-    } catch {
-      // Ignore non-JSON proxy responses.
-    }
-
-    throw new Error(message);
+    throw new Error(
+      await printerErrorMessage(response, `Motion command failed with ${response.status}`),
+    );
   }
 
   logAuditEvent('printer.motion', printer.name);
