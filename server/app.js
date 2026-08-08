@@ -1684,6 +1684,17 @@ const LIVE_TELEMETRY_FIELDS = [
   'spools', 'fanSpeeds',
 ];
 
+// Fields the poller mirrors as a RAW string (telemetry.Publish writes Go strings
+// verbatim and JSON-encodes everything else). They must never be JSON.parse'd
+// back: a message that happens to be valid JSON on its own — a bare numeric
+// error code, `true`, `[...]` — would silently come back as a number/bool/array
+// and change the field's type versus the Postgres read. That type flip breaks
+// every consumer that (correctly) expects a string: the dashboard's
+// `errorMessage.trim()`, and the Orca client's `get<std::string>()`, which
+// throws and blanks its whole printer list. `null` is the one encoded value the
+// poller can send here (json.Marshal of a nil errorMessage).
+const LIVE_TELEMETRY_STRING_FIELDS = new Set(['status', 'errorMessage', 'offlineSince']);
+
 async function overlayLiveTelemetry(printer) {
   if (!isRedisEnabled() || !printer || !printer.id) {
     return printer;
@@ -1696,8 +1707,13 @@ async function overlayLiveTelemetry(printer) {
     if (live[field] === undefined) {
       continue;
     }
-    // The poller stores strings raw and everything else JSON-encoded, so parse
-    // and fall back to the raw value for plain strings (status, offlineSince…).
+    // The poller stores strings raw and everything else JSON-encoded. String
+    // fields are taken verbatim (see LIVE_TELEMETRY_STRING_FIELDS) so their type
+    // can never flip; the literal 'null' is the poller's encoding of "no value".
+    if (LIVE_TELEMETRY_STRING_FIELDS.has(field)) {
+      printer[field] = live[field] === 'null' ? null : live[field];
+      continue;
+    }
     try {
       printer[field] = JSON.parse(live[field]);
     } catch {
