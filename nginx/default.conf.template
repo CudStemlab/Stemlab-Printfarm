@@ -236,6 +236,20 @@ server {
     proxy_send_timeout 3600s;
   }
 
+  # Admin backup download: the app streams the archive out entry by entry
+  # (nothing is assembled in memory), so buffering it here would both delay the
+  # download and put the whole archive back on nginx's disk. Pass it straight
+  # through, and allow a long-running response for a big farm.
+  location = /api/admin/backup/download {
+    proxy_pass http://web:5173;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto $forwarded_proto;
+    proxy_buffering off;
+    proxy_read_timeout 3600s;
+    proxy_send_timeout 3600s;
+  }
+
   # Admin backup restore: the uploaded archive is a full-data backup (every
   # table, including every stored queue-job model file), so it needs the same
   # large-body treatment as the queue file routes above.

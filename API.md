@@ -785,8 +785,32 @@ session); restore is CSRF same-origin-gated and audited.
 
 | Method & path | Description |
 |---------------|-------------|
-| `GET /api/admin/backup/download` | Builds the backup in memory and streams it back as `application/zip` (`Content-Disposition: attachment; filename="printfarm-backup-<timestamp>.zip"`). The archive contains `manifest.json` (`{ generatedAt, appVersion, tables: [{ name, rowCount }] }`) plus one `tables/<name>.json` per table (its rows verbatim, with any `bytea` column tagged as `{ __bytea__: base64 }`). |
-| `POST /api/admin/backup/restore` | Body is the raw `.zip` bytes (not multipart — same convention as `PUT /api/v1/queue/:id/file`). Parses the archive, then **truncates and replaces every table present in it** inside one transaction — a bad or partial upload rolls back with no changes committed. `413` if the upload exceeds `BACKUP_UPLOAD_MAX_BYTES` (default 500 MB; the matching nginx `/api/admin/backup/restore` location raises the body cap via `BACKUP_MAX_BODY_SIZE`, default `500m`). `400` for a malformed/unrecognized archive, `500` (with nothing committed) if the restore transaction itself fails. On success, `200 { ok: true, tables: [{ name, rowCount }] }` and an audit-log entry (`action: backup.restore`). Restoring may log the acting admin out if their session row isn't in the archive, and can cause transient poller errors mid-restore — the UI warns about both before confirming. |
+| `GET /api/admin/backup/download` | Streams the archive out as `application/zip` while it is being built (`Content-Disposition: attachment; filename="printfarm-backup-<timestamp>.zip"`, **no `Content-Length`** — the size isn't known until the last byte). Add `?includeFiles=0` (or `=false`) for a metadata-only archive that keeps every row but drops the stored model-file bytes. Audited (`action: backup.download`), which is what the `backup-fresh` update pre-flight reads. A failure mid-stream can only be signalled by aborting the connection, so the browser reports a failed/truncated download. |
+| `POST /api/admin/backup/restore` | Body is the raw `.zip` bytes (not multipart — same convention as `PUT /api/v1/queue/:id/file`). The upload is spooled to a temp file (`BACKUP_TMP_DIR`, default OS temp dir), then applied entry by entry: **every table present in the archive is truncated and replaced** inside one transaction — a bad or partial upload rolls back with no changes committed. Reads both archive formats (see below). `413` if the upload exceeds `BACKUP_UPLOAD_MAX_BYTES` (default 2 GB; the matching nginx `/api/admin/backup/restore` location raises the body cap via `BACKUP_MAX_BODY_SIZE`, default `2048m` — keep the two in sync). `400` for a malformed/unrecognized archive, `500` (with nothing committed) if the restore transaction itself fails. On success, `200 { ok: true, tables: [{ name, rowCount }] }` and an audit-log entry (`action: backup.restore`). Restoring may log the acting admin out if their session row isn't in the archive, and can cause transient poller errors mid-restore — the UI warns about both before confirming. |
+
+**Archive format.** Both endpoints stream, so neither the archive nor any one
+table is ever fully resident — memory stays flat no matter how much data the
+farm holds (the earlier build-it-all-in-RAM version could exhaust the
+container's memory on a farm with real queue history).
+
+*v2* (what is written today, deflate-compressed):
+
+```
+manifest.json                          { formatVersion: 2, generatedAt, appVersion,
+                                         includesFiles, tables: [{ name, rowCount }],
+                                         blobs: { count, bytes } }
+tables/<name>.jsonl                    one JSON object per line — the table's rows
+blobs/<table>/<row>-<column>.bin       one entry per non-null bytea value
+```
+
+A row's `bytea` column holds a marker `{ "__blob__": "blobs/…", "bytes": N, "key": { <pk>: … } }`
+pointing at its entry; the bytes are read out of Postgres (and written back) in
+slices, so a large model file never lands in the process whole. Rows come from
+one `REPEATABLE READ` snapshot, so every table in the archive is from the same
+instant.
+
+*v1* (older archives — still restore, never written): `tables/<name>.json`, one
+JSON array per table, with each `bytea` inlined as `{ "__bytea__": base64 }`.
 
 ### Maintenance (frontend `/api/*`)
 

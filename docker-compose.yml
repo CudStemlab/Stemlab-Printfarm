@@ -126,8 +126,12 @@ services:
       # Max size of a backup archive uploaded via Settings → Backup & Restore
       # (a full-data backup, so it can be far larger than a single print-request
       # upload). The nginx /api/admin/backup/restore body cap (BACKUP_MAX_BODY_SIZE
-      # below) should match.
-      BACKUP_UPLOAD_MAX_BYTES: ${BACKUP_UPLOAD_MAX_BYTES:-524288000}
+      # below) should match. The upload is spooled to a temp file and read back
+      # entry by entry, so this bounds disk (BACKUP_TMP_DIR), not memory.
+      BACKUP_UPLOAD_MAX_BYTES: ${BACKUP_UPLOAD_MAX_BYTES:-2147483648}
+      # Where the restore upload is spooled. Defaults to the OS temp dir; point
+      # it at a mounted volume if the container's /tmp is small.
+      BACKUP_TMP_DIR: ${BACKUP_TMP_DIR:-}
       # NOTE: APP_VERSION (the running git SHA) is baked into the image at build
       # time (Dockerfile.web ENV) — it must NOT be listed here, or an unset host
       # APP_VERSION would override the baked value with an empty string. Local
@@ -224,7 +228,7 @@ services:
       SLICER_MAX_BODY_SIZE: ${SLICER_MAX_BODY_SIZE:-500m}
       # Backup-restore upload body cap passed through to the nginx template.
       # Must be >= BACKUP_UPLOAD_MAX_BYTES on the web service.
-      BACKUP_MAX_BODY_SIZE: ${BACKUP_MAX_BODY_SIZE:-500m}
+      BACKUP_MAX_BODY_SIZE: ${BACKUP_MAX_BODY_SIZE:-2048m}
       # H-1: gates /prometheus (fail-closed — see
       # nginx/docker-entrypoint.d/10-prometheus-htpasswd.sh). With neither var
       # below set, /prometheus returns 403. Set PROMETHEUS_BASIC_AUTH_PASSWORD to

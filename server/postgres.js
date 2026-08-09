@@ -3146,17 +3146,6 @@ function prepareRowForJson(row) {
   return out;
 }
 
-function reviveRowFromJson(row) {
-  const out = {};
-  for (const [key, value] of Object.entries(row)) {
-    out[key] = (
-      value && typeof value === 'object' && !Array.isArray(value)
-      && typeof value.__bytea__ === 'string' && Object.keys(value).length === 1
-    ) ? Buffer.from(value.__bytea__, 'base64') : value;
-  }
-  return out;
-}
-
 // Query parameters aren't auto-serialized by `pg`: JSONB columns need an
 // explicit JSON.stringify (matching every other write path in this file),
 // while bytea (Buffer) and plain scalars pass straight through.
@@ -3167,110 +3156,374 @@ function toInsertParam(value) {
   return value;
 }
 
-// Returns { manifest, tables } — `tables` maps table name to its rows
-// (bytea-tagged via prepareRowForJson, ready to JSON.stringify), `manifest`
-// summarizes what's inside for the archive's manifest.json.
-export async function buildBackupSnapshot() {
+// Archive layout version. v1 (the original in-memory builder) wrote one
+// `tables/<name>.json` per table holding the whole row array, with every bytea
+// column inlined as base64 — which meant the server had to hold the entire
+// farm's data, base64-expanded, in RAM to write *or* read one. v2 streams:
+// rows go out as newline-delimited JSON (`tables/<name>.jsonl`, one row per
+// line) and each bytea value becomes its own archive entry under `blobs/`,
+// referenced from the row by a `{ __blob__, bytes, key }` marker. Both formats
+// restore; only v2 is written.
+export const BACKUP_FORMAT_VERSION = 2;
+
+// Rows pulled per cursor round-trip while writing a backup. Only metadata rows
+// (bytea columns are streamed separately), so a few hundred is cheap.
+const BACKUP_ROW_FETCH = 500;
+// Bytes pulled per round-trip when streaming one bytea value in or out. This is
+// the ceiling on resident memory for file data during backup/restore.
+const BACKUP_BLOB_CHUNK_BYTES = 256 * 1024;
+// Rows per multi-row INSERT while restoring.
+const RESTORE_INSERT_BATCH = 200;
+
+function quoteIdent(name) {
+  return `"${String(name).replace(/"/g, '""')}"`;
+}
+
+// Column names come from information_schema (backup) or from the uploaded
+// archive (restore); the restore path validates every name against the live
+// table before it reaches SQL, so nothing archive-controlled is interpolated.
+async function liveColumnsOf(client, table) {
+  const result = await client.query(`SELECT * FROM ${quoteIdent(table)} LIMIT 0;`);
+  return new Set(result.fields.map((field) => field.name));
+}
+
+async function byteaColumnsOf(client, table) {
+  const { rows } = await client.query(
+    `SELECT column_name FROM information_schema.columns
+      WHERE table_schema = current_schema() AND table_name = $1 AND data_type = 'bytea'
+      ORDER BY ordinal_position;`,
+    [table],
+  );
+  return rows.map((row) => row.column_name);
+}
+
+async function primaryKeyColumnsOf(client, table) {
+  const { rows } = await client.query(
+    `SELECT a.attname AS column_name
+       FROM pg_index i
+       JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
+      WHERE i.indrelid = $1::regclass AND i.indisprimary;`,
+    [table],
+  );
+  return rows.map((row) => row.column_name);
+}
+
+async function tableExists(client, table) {
+  const { rows } = await client.query('SELECT to_regclass($1::text) AS oid;', [table]);
+  return Boolean(rows[0]?.oid);
+}
+
+// Streams one bytea value out of Postgres in fixed-size slices, so a 400 MB
+// model file costs BACKUP_BLOB_CHUNK_BYTES of RAM rather than 400 MB (the same
+// trick the queue-job download route uses).
+async function* streamBlobChunks(client, table, column, keyColumns, keyValues, size) {
+  const where = keyColumns.map((col, i) => `${quoteIdent(col)} = $${i + 3}`).join(' AND ');
+  const sql = `SELECT substring(${quoteIdent(column)} FROM $1 FOR $2) AS chunk
+                 FROM ${quoteIdent(table)} WHERE ${where};`;
+  for (let offset = 0; offset < size; offset += BACKUP_BLOB_CHUNK_BYTES) {
+    const { rows } = await client.query(sql, [offset + 1, BACKUP_BLOB_CHUNK_BYTES, ...keyValues]);
+    const chunk = rows[0]?.chunk;
+    if (!chunk || chunk.length === 0) break;
+    yield chunk;
+  }
+}
+
+// Opens a consistent, read-only snapshot of the whole backup set and returns an
+// async iterator of archive entries — each `{ name, source, method?, level?,
+// expectedSize? }`, where `source` is an async iterable of Buffers. Nothing is
+// materialized: the caller (the download route) pipes each entry straight into
+// the ZIP writer, and the entry generators pull from the database as the client
+// drains them. REPEATABLE READ means every table in the archive comes from the
+// same instant, which the old table-by-table build could not promise.
+//
+// Call `close()` when done (or on error) to end the transaction and release the
+// pooled connection.
+export async function createBackupSource({ includeFiles = true } = {}) {
   await ensureSchema();
 
-  const tables = {};
-  const manifestTables = [];
+  const client = await getPool().connect();
+  let closed = false;
+  try {
+    await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ, READ ONLY');
+  } catch (error) {
+    client.release();
+    throw error;
+  }
 
-  for (const table of BACKUP_TABLES) {
-    const result = await query(`SELECT * FROM ${table};`);
-    tables[table] = result.rows.map(prepareRowForJson);
-    manifestTables.push({ name: table, rowCount: result.rows.length });
+  const manifestTables = [];
+  let cursorSeq = 0;
+  let blobCount = 0;
+  let blobBytes = 0;
+
+  async function* entries() {
+    for (const table of BACKUP_TABLES) {
+      if (!(await tableExists(client, table))) continue;
+
+      const liveColumns = [...(await liveColumnsOf(client, table))];
+      const byteaColumns = await byteaColumnsOf(client, table);
+      const keyColumns = byteaColumns.length > 0 ? await primaryKeyColumnsOf(client, table) : [];
+      // Without a primary key there is no way to point a blob entry back at its
+      // row, so fall back to inlining that table's bytea (v1 behaviour). No
+      // table in this schema hits it — every backed-up table has a PK.
+      const inlineBytea = includeFiles && byteaColumns.length > 0 && keyColumns.length === 0;
+      const streamBlobs = includeFiles && byteaColumns.length > 0 && keyColumns.length > 0;
+      // Never SELECT a bytea column outright unless it has to be inlined —
+      // that alone would pull every stored model file into the process.
+      const plainColumns = liveColumns.filter((col) => inlineBytea || !byteaColumns.includes(col));
+
+      const pendingBlobs = [];
+      let rowCount = 0;
+
+      const selectList = [
+        ...plainColumns.map(quoteIdent),
+        ...(streamBlobs
+          ? byteaColumns.map((col) => `octet_length(${quoteIdent(col)}) AS ${quoteIdent(`__size__${col}`)}`)
+          : []),
+      ].join(', ');
+
+      const cursorName = `printfarm_backup_cur_${++cursorSeq}`;
+
+      async function* rowLines() {
+        await client.query(
+          `DECLARE ${cursorName} NO SCROLL CURSOR FOR SELECT ${selectList} FROM ${quoteIdent(table)};`,
+        );
+        try {
+          for (;;) {
+            const { rows } = await client.query(`FETCH FORWARD ${BACKUP_ROW_FETCH} FROM ${cursorName};`);
+            if (rows.length === 0) break;
+
+            let text = '';
+            for (const row of rows) {
+              const out = {};
+              for (const col of plainColumns) out[col] = row[col];
+              const prepared = prepareRowForJson(out);
+
+              if (streamBlobs) {
+                const keyValues = keyColumns.map((col) => row[col]);
+                for (const col of byteaColumns) {
+                  const size = row[`__size__${col}`];
+                  if (size === null || size === undefined) {
+                    prepared[col] = null;
+                    continue;
+                  }
+                  if (Number(size) === 0) {
+                    // Zero-length bytea has no blob entry; keep it distinct
+                    // from NULL with an (empty) inline value.
+                    prepared[col] = { __bytea__: '' };
+                    continue;
+                  }
+                  const path = `blobs/${table}/${rowCount}-${col}.bin`;
+                  const key = {};
+                  keyColumns.forEach((keyCol, i) => { key[keyCol] = keyValues[i]; });
+                  prepared[col] = { __blob__: path, bytes: Number(size), key };
+                  pendingBlobs.push({ path, column: col, keyValues, size: Number(size) });
+                  blobCount += 1;
+                  blobBytes += Number(size);
+                }
+              } else if (!includeFiles) {
+                // "Settings only" backup: keep the row, drop the file bytes.
+                for (const col of byteaColumns) prepared[col] = null;
+              }
+
+              text += `${JSON.stringify(prepared)}\n`;
+              rowCount += 1;
+            }
+            yield Buffer.from(text, 'utf8');
+          }
+        } finally {
+          await client.query(`CLOSE ${cursorName};`).catch(() => {});
+        }
+      }
+
+      yield { name: `tables/${table}.jsonl`, source: rowLines() };
+      // The consumer fully drains an entry before asking for the next one, so
+      // by here rowCount/pendingBlobs are final for this table.
+      manifestTables.push({ name: table, rowCount });
+
+      for (const blob of pendingBlobs) {
+        yield {
+          name: blob.path,
+          expectedSize: blob.size,
+          // Model files are often already-compressed containers (.3mf/.zip);
+          // level 1 keeps the CPU cost low while still shrinking raw STL/gcode.
+          level: 1,
+          source: streamBlobChunks(client, table, blob.column, keyColumns, blob.keyValues, blob.size),
+        };
+      }
+    }
+
+    // Written last: only now are the row counts known, and ZIP readers work off
+    // the central directory, so entry order does not matter.
+    const manifest = {
+      formatVersion: BACKUP_FORMAT_VERSION,
+      generatedAt: new Date().toISOString(),
+      appVersion: process.env.APP_VERSION || 'dev',
+      includesFiles: includeFiles,
+      tables: manifestTables,
+      blobs: { count: blobCount, bytes: blobBytes },
+    };
+    yield { name: 'manifest.json', source: [Buffer.from(JSON.stringify(manifest, null, 2), 'utf8')] };
   }
 
   return {
-    manifest: {
-      generatedAt: new Date().toISOString(),
-      appVersion: process.env.APP_VERSION || 'dev',
-      tables: manifestTables,
+    entries,
+    summary: () => ({ tables: manifestTables, blobs: { count: blobCount, bytes: blobBytes } }),
+    async close() {
+      if (closed) return;
+      closed = true;
+      await client.query('COMMIT').catch(() => {});
+      client.release();
     },
-    tables,
   };
 }
 
-// Reverses prepareRowForJson on every row of every table in a parsed backup
-// archive. Called once, right after reading tables/<name>.json back out of
-// the uploaded zip.
-export function reviveBackupTables(rawTables) {
-  const tables = {};
-  for (const [name, rows] of Object.entries(rawTables)) {
-    tables[name] = Array.isArray(rows) ? rows.map(reviveRowFromJson) : rows;
+// Reverses the on-disk encoding for one restored value: v2 blob markers become
+// NULL (the bytes are streamed in afterwards by writeBlobChunk), v1 inline
+// base64 becomes a Buffer.
+function reviveRestoreValue(value) {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    if (typeof value.__blob__ === 'string') return null;
+    if (typeof value.__bytea__ === 'string' && Object.keys(value).length === 1) {
+      return Buffer.from(value.__bytea__, 'base64');
+    }
   }
-  return tables;
+  return value;
 }
 
-// Replaces all data in every BACKUP_TABLES table with the rows in `tables`
-// (shape: { [tableName]: row[] }, already revived via reviveBackupTables).
-// Runs as one transaction on a dedicated client: TRUNCATE everything named in
-// the archive, insert rows back respecting the one FK relationship in this
-// schema, then commit. Any error rolls the whole thing back so a bad/partial
-// upload can't half-apply. Tables missing from the archive (e.g. an older
-// backup taken before a table existed) are left untouched.
-export async function restoreBackupSnapshot(tables) {
+// Restore, driven a batch at a time by the caller instead of taking the whole
+// archive as one object. Opens a transaction, truncates every recognized table
+// named in the archive, and then accepts rows/blob chunks until commit() —
+// so a bad or partial upload still rolls back with nothing applied, exactly
+// like the old all-at-once version, but without ever holding the archive's
+// contents in memory.
+export async function startBackupRestore(tableNames) {
   await ensureSchema();
 
-  const knownTables = BACKUP_TABLES.filter((name) => Array.isArray(tables[name]));
+  const knownTables = BACKUP_TABLES.filter((name) => tableNames.includes(name));
   if (knownTables.length === 0) {
     throw new Error('Backup archive contained no recognized tables');
   }
 
   const client = await getPool().connect();
+  const liveColumnCache = new Map();
+  const insertPlans = new Map();
+  let settled = false;
+
+  async function columnsOf(table) {
+    if (!liveColumnCache.has(table)) liveColumnCache.set(table, await liveColumnsOf(client, table));
+    return liveColumnCache.get(table);
+  }
+
   try {
     await client.query('BEGIN');
-    await client.query(`TRUNCATE TABLE ${knownTables.join(', ')};`);
-
-    for (const table of knownTables) {
-      const rows = tables[table];
-      if (rows.length === 0) continue;
-
-      // A backup can predate a column drop/rename that never got a matching
-      // migration (ensureSchema only ever ADDs columns, never drops them —
-      // so a column removed from the schema code can still be lingering, or
-      // gone, on any given database). Restoring into a database whose live
-      // schema differs from the one the backup was taken on should degrade
-      // gracefully rather than fail the whole restore: only insert columns
-      // that exist on both sides, dropping anything the backup has that this
-      // database's queue_jobs (etc.) does not.
-      const liveColumns = new Set(
-        (await client.query(`SELECT * FROM ${table} LIMIT 0;`)).fields.map((field) => field.name),
-      );
-      const backupColumns = Object.keys(rows[0]);
-      const columns = backupColumns.filter((col) => liveColumns.has(col));
-      const droppedColumns = backupColumns.filter((col) => !liveColumns.has(col));
-      if (droppedColumns.length > 0) {
-        logger.warn('backup restore: dropping columns not present in the current schema', {
-          table,
-          columns: droppedColumns,
-        });
-      }
-
-      const columnList = columns.map((col) => `"${col}"`).join(', ');
-      const placeholders = columns.map((_, i) => `$${i + 1}`).join(', ');
-      const insertSql = `INSERT INTO ${table} (${columnList}) VALUES (${placeholders});`;
-
-      for (const row of rows) {
-        await client.query(insertSql, columns.map((col) => toInsertParam(row[col])));
-      }
-    }
-
-    // audit_logs.id is the only auto-incrementing PK in this schema;
-    // restoring explicit ids leaves its sequence behind, so bump it past the
-    // restored max (falls back to 1 for an empty table).
-    if (knownTables.includes('audit_logs')) {
-      await client.query(
-        `SELECT setval('audit_logs_id_seq', COALESCE((SELECT MAX(id) FROM audit_logs), 1), true);`,
-      );
-    }
-
-    await client.query('COMMIT');
+    await client.query(`TRUNCATE TABLE ${knownTables.map(quoteIdent).join(', ')};`);
   } catch (error) {
     await client.query('ROLLBACK').catch(() => {});
-    throw error;
-  } finally {
     client.release();
+    throw error;
   }
+
+  return {
+    tables: knownTables,
+
+    // rows: an array of plain objects straight out of the archive.
+    async insertRows(table, rows) {
+      if (!knownTables.includes(table) || rows.length === 0) return;
+
+      let plan = insertPlans.get(table);
+      if (!plan) {
+        // A backup can predate a column drop/rename that never got a matching
+        // migration (ensureSchema only ever ADDs columns, never drops them —
+        // so a column removed from the schema code can still be lingering, or
+        // gone, on any given database). Restoring into a database whose live
+        // schema differs from the one the backup was taken on should degrade
+        // gracefully rather than fail the whole restore: only insert columns
+        // that exist on both sides, dropping anything the backup has that this
+        // database's queue_jobs (etc.) does not.
+        const liveColumns = await columnsOf(table);
+        const backupColumns = Object.keys(rows[0]);
+        const columns = backupColumns.filter((col) => liveColumns.has(col));
+        const droppedColumns = backupColumns.filter((col) => !liveColumns.has(col));
+        if (droppedColumns.length > 0) {
+          logger.warn('backup restore: dropping columns not present in the current schema', {
+            table,
+            columns: droppedColumns,
+          });
+        }
+        if (columns.length === 0) throw new Error(`No restorable columns for table "${table}"`);
+        plan = { columns, columnList: columns.map(quoteIdent).join(', ') };
+        insertPlans.set(table, plan);
+      }
+
+      for (let start = 0; start < rows.length; start += RESTORE_INSERT_BATCH) {
+        const batch = rows.slice(start, start + RESTORE_INSERT_BATCH);
+        const params = [];
+        const tuples = batch.map((row) => {
+          const placeholders = plan.columns.map((col) => {
+            params.push(toInsertParam(reviveRestoreValue(row[col])));
+            return `$${params.length}`;
+          });
+          return `(${placeholders.join(', ')})`;
+        });
+        await client.query(
+          `INSERT INTO ${quoteIdent(table)} (${plan.columnList}) VALUES ${tuples.join(', ')};`,
+          params,
+        );
+      }
+    },
+
+    // Appends one slice of a bytea column to an already-inserted row. `key` is
+    // the archive's `{ column: value }` map from the row's blob marker; both it
+    // and `column` are validated against the live table, so archive-supplied
+    // names never reach SQL unchecked.
+    async writeBlobChunk(table, key, column, chunk, first) {
+      if (!knownTables.includes(table)) throw new Error(`Unknown table "${table}" in archive blob`);
+      const liveColumns = await columnsOf(table);
+      if (!liveColumns.has(column)) return; // column dropped since the backup
+      const keyColumns = Object.keys(key || {});
+      if (keyColumns.length === 0) throw new Error(`Archive blob for "${table}" has no row key`);
+      for (const col of keyColumns) {
+        if (!liveColumns.has(col)) throw new Error(`Archive blob key column "${col}" is not in ${table}`);
+      }
+
+      const where = keyColumns.map((col, i) => `${quoteIdent(col)} = $${i + 2}`).join(' AND ');
+      // Explicit ::bytea casts: the chunk goes over the wire as an untyped
+      // parameter, and `bytea || unknown` is ambiguous to the planner.
+      const assignment = first
+        ? `${quoteIdent(column)} = $1::bytea`
+        : `${quoteIdent(column)} = COALESCE(${quoteIdent(column)}, ''::bytea) || $1::bytea`;
+      await client.query(
+        `UPDATE ${quoteIdent(table)} SET ${assignment} WHERE ${where};`,
+        [chunk, ...keyColumns.map((col) => key[col])],
+      );
+    },
+
+    async commit() {
+      if (settled) return;
+      settled = true;
+      try {
+        // audit_logs.id is the only auto-incrementing PK in this schema;
+        // restoring explicit ids leaves its sequence behind, so bump it past
+        // the restored max (falls back to 1 for an empty table).
+        if (knownTables.includes('audit_logs')) {
+          await client.query(
+            `SELECT setval('audit_logs_id_seq', COALESCE((SELECT MAX(id) FROM audit_logs), 1), true);`,
+          );
+        }
+        await client.query('COMMIT');
+      } catch (error) {
+        await client.query('ROLLBACK').catch(() => {});
+        throw error;
+      } finally {
+        client.release();
+      }
+    },
+
+    async abort() {
+      if (settled) return;
+      settled = true;
+      await client.query('ROLLBACK').catch(() => {});
+      client.release();
+    },
+  };
 }

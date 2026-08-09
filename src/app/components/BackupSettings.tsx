@@ -3,6 +3,8 @@ import { toast } from 'sonner';
 import { AlertTriangle, Download, Loader2, Upload } from 'lucide-react';
 import { Card } from './ui/card';
 import { Button } from './ui/button';
+import { Checkbox } from './ui/checkbox';
+import { Label } from './ui/label';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -24,17 +26,24 @@ import { restoreBackup } from '../lib/backupApi';
 // rather than firing on file selection.
 export function BackupSettings() {
   const [restoring, setRestoring] = useState(false);
+  const [includeFiles, setIncludeFiles] = useState(true);
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // The server streams the archive out as it builds it, so the browser gets a
+  // download with no known length — expected, not a bug.
   const handleDownload = () => {
     const anchor = document.createElement('a');
-    anchor.href = '/api/admin/backup/download';
+    anchor.href = includeFiles
+      ? '/api/admin/backup/download'
+      : '/api/admin/backup/download?includeFiles=0';
     anchor.download = '';
     document.body.appendChild(anchor);
     anchor.click();
     document.body.removeChild(anchor);
-    toast.success('Started backup download');
+    toast.success(
+      includeFiles ? 'Started backup download' : 'Started backup download (without model files)',
+    );
   };
 
   const handleFileSelected = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -87,6 +96,19 @@ export function BackupSettings() {
           className="hidden"
           onChange={handleFileSelected}
         />
+      </div>
+
+      <div className="mt-3 flex items-start gap-2">
+        <Checkbox
+          id="backup-include-files"
+          checked={includeFiles}
+          onCheckedChange={(checked) => setIncludeFiles(checked === true)}
+          disabled={restoring}
+        />
+        <Label htmlFor="backup-include-files" className="text-sm font-normal text-muted-foreground">
+          Include uploaded model files. Turn this off for a much smaller archive with
+          every setting, printer, and queue record but no STL/3MF bytes.
+        </Label>
       </div>
 
       <AlertDialog open={pendingFile !== null} onOpenChange={(open) => !open && setPendingFile(null)}>
