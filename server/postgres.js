@@ -3379,8 +3379,8 @@ export async function createBackupSource({ includeFiles = true } = {}) {
 
 // Reverses the on-disk encoding for one restored value: v2 blob markers become
 // NULL (the bytes are streamed in afterwards by writeBlobChunk), v1 inline
-// base64 becomes a Buffer.
-function reviveRestoreValue(value) {
+// base64 becomes a Buffer. (Exported for backupArchive.test.mjs.)
+export function reviveRestoreValue(value) {
   if (value && typeof value === 'object' && !Array.isArray(value)) {
     if (typeof value.__blob__ === 'string') return null;
     if (typeof value.__bytea__ === 'string' && Object.keys(value).length === 1) {

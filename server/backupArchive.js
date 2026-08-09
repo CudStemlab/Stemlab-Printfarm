@@ -169,7 +169,10 @@ function tableNameFromEntry(name) {
 // Restores a backup archive at `archivePath`. Everything happens inside the
 // restore session's single transaction: on any failure the session is rolled
 // back, so a bad archive leaves the database untouched.
-export async function restoreBackupArchive(archivePath) {
+//
+// `createSession` is injectable so backupArchive.test.mjs can drive the whole
+// archive → rows/blobs path against a recording stub instead of a database.
+export async function restoreBackupArchive(archivePath, { createSession = startBackupRestore } = {}) {
   let zip;
   try {
     zip = await openZipFile(archivePath);
@@ -196,7 +199,7 @@ export async function restoreBackupArchive(archivePath) {
       throw new BackupArchiveError('Backup archive is missing manifest.json or table data.');
     }
 
-    const session = await startBackupRestore(tableEntries.map((entry) => tableNameFromEntry(entry.name)));
+    const session = await createSession(tableEntries.map((entry) => tableNameFromEntry(entry.name)));
     // Insert in the order the backup set defines, not the order the archive
     // happens to list: filament_station_assignments carries this schema's only
     // foreign keys and must land after the rows it points at.
