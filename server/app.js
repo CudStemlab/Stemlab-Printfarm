@@ -21,7 +21,6 @@ import {
 } from './eventStream.js';
 import {
   approveManagerRequest,
-  buildBackupSnapshot,
   clearManagerRequestKeySecret,
   createDiscordWebhook,
   createManagerRequest,
@@ -96,8 +95,7 @@ import {
   markMaintenanceEventsNotified,
   recalcHealthScore,
   healthStatusFromScore,
-  reviveBackupTables,
-  restoreBackupSnapshot,
+  createBackupSource,
   createUpdateRun,
   getActiveUpdateRun,
   getUpdateRun,
@@ -109,7 +107,12 @@ import {
   lastRollbackUpdateRun,
   currentSchemaVersion,
 } from './postgres.js';
-import { createZip, readZip } from './zipArchive.js';
+import { ZipStreamWriter } from './zipStream.js';
+import {
+  BackupArchiveError,
+  restoreBackupArchive,
+  spoolRequestToTempFile,
+} from './backupArchive.js';
 import { verifySlicerGrant } from './slicerGrant.js';
 import { handleFilamentStation } from './filamentStation.js';
 import { sendBambuCommand } from './bambuCommands.js';
@@ -192,9 +195,11 @@ const QUEUE_UPLOAD_MAX_BYTES = Number.parseInt(
 // A restore upload is a full backup archive (every table, including every
 // stored queue-job model file), so its ceiling is far higher than a single
 // print-request upload; the matching nginx location lifts its body cap to
-// the same value.
+// the same value. The archive is spooled to a temp file and read back through
+// the ZIP central directory, so this bounds disk use, not memory — which is
+// why the default can be generous.
 const BACKUP_UPLOAD_MAX_BYTES = Number.parseInt(
-  process.env.BACKUP_UPLOAD_MAX_BYTES ?? String(500 * 1024 * 1024),
+  process.env.BACKUP_UPLOAD_MAX_BYTES ?? String(2 * 1024 * 1024 * 1024),
   10,
 );
 // Print-request intake only accepts printable mesh formats (STL / 3MF / OBJ).
@@ -5061,94 +5066,119 @@ async function handleApi(req, res, requestUrl) {
   // Full-data backup. Every table the app considers "data" (printers,
   // filament inventory, queue jobs + their stored model files, app_settings —
   // branding/automation/SSO/staff users/admin credential all live there —
-  // API keys, audit logs, maintenance, network usage) is serialized to one
-  // JSON file per table plus a manifest.json, zipped in memory (buildZip
-  // needs the whole archive assembled to know the central-directory offsets)
-  // and streamed back as a download. Admin-only (isSensitiveRead); this is
-  // deliberately not redacted like the public printer list, since it's the
-  // whole point of a backup.
+  // API keys, audit logs, maintenance, network usage) is written straight into
+  // the response as a compressed ZIP: rows as newline-delimited JSON, each
+  // stored model file as its own entry streamed out of Postgres in slices.
+  // Nothing is buffered — the archive can be far larger than the container's
+  // memory, which the previous build-it-all-in-RAM version could not survive.
+  // `?includeFiles=0` skips the model-file bytes for a small settings-and-
+  // metadata-only backup. Admin-only (isSensitiveRead); deliberately not
+  // redacted like the public printer list, since that's the point of a backup.
   if (requestUrl.pathname === '/api/admin/backup/download' && req.method === 'GET') {
-    const { manifest, tables } = await buildBackupSnapshot();
-    const entries = [{ name: 'manifest.json', data: Buffer.from(JSON.stringify(manifest)) }];
-    for (const [name, rows] of Object.entries(tables)) {
-      entries.push({ name: `tables/${name}.json`, data: Buffer.from(JSON.stringify(rows)) });
-    }
-    const zip = createZip(entries);
-    const timestamp = manifest.generatedAt.replace(/[:.]/g, '-');
+    const includeFilesParam = requestUrl.searchParams.get('includeFiles');
+    const includeFiles = !(includeFilesParam === '0' || includeFilesParam === 'false');
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const source = await createBackupSource({ includeFiles });
+
     res.statusCode = 200;
     res.setHeader('Content-Type', 'application/zip');
-    res.setHeader('Content-Length', zip.length);
+    // No Content-Length: the size isn't known until the last byte is written.
     res.setHeader('Content-Disposition', `attachment; filename="printfarm-backup-${timestamp}.zip"`);
     res.setHeader('Cache-Control', 'no-store');
-    res.end(zip);
+
+    let failed = null;
+    try {
+      const zip = new ZipStreamWriter(res);
+      for await (const entry of source.entries()) {
+        await zip.addEntry(entry.name, entry.source, {
+          expectedSize: entry.expectedSize ?? null,
+          ...(entry.level === undefined ? {} : { level: entry.level }),
+        });
+      }
+      await zip.finish();
+    } catch (error) {
+      failed = error;
+    } finally {
+      await source.close();
+    }
+
+    if (failed) {
+      // Headers are already out, so the only honest signal left is an aborted
+      // response — a truncated file the browser reports as a failed download.
+      logger.error('backup download failed', {
+        err: failed instanceof Error ? failed.message : failed,
+      });
+      res.destroy();
+      return true;
+    }
+
+    res.end();
+    const summary = source.summary();
+    // Audited so the `backup-fresh` update pre-flight can see that a backup
+    // was actually taken (not just restored).
+    const session = await resolveSession(req);
+    await recordAuditLog({
+      actorName: session ? session.name : null,
+      actorUsername: session ? session.username : null,
+      actorRole: session ? session.role : null,
+      action: 'backup.download',
+      target: null,
+      details: { includeFiles, tables: summary.tables, blobs: summary.blobs },
+      source: 'web',
+      ip: getClientIp(req),
+    });
     return true;
   }
 
-  // Restore from a backup archive produced by the endpoint above. Destructive:
-  // TRUNCATEs and replaces every table named in the archive inside one
-  // transaction (restoreBackupSnapshot). Admin-only (isAdminMutation) and
-  // audited. The upload is the raw zip bytes as the request body (not
+  // Restore from a backup archive produced by the endpoint above (or by an
+  // older version — v1 archives, one JSON array per table with inlined base64
+  // file bytes, still restore). Destructive: TRUNCATEs and replaces every table
+  // named in the archive inside one transaction. Admin-only (isAdminMutation)
+  // and audited. The upload is the raw zip bytes as the request body (not
   // multipart) — simpler for a single-file upload, matching the
-  // /api/v1/queue/:id/file PUT pattern.
+  // /api/v1/queue/:id/file PUT pattern — and is spooled to a temp file rather
+  // than buffered, so the archive size is bounded by disk, not by RAM.
   if (requestUrl.pathname === '/api/admin/backup/restore' && req.method === 'POST') {
-    let archive;
+    let upload;
     try {
-      archive = await readBodyBounded(req, BACKUP_UPLOAD_MAX_BYTES);
-    } catch {
-      const limitMb = Math.round(BACKUP_UPLOAD_MAX_BYTES / (1024 * 1024));
-      sendJson(res, 413, { error: `Backup archive exceeds the ${limitMb} MB upload limit.` });
-      return true;
-    }
-
-    let entries;
-    try {
-      entries = readZip(archive);
+      upload = await spoolRequestToTempFile(req, BACKUP_UPLOAD_MAX_BYTES);
     } catch (error) {
-      sendJson(res, 400, { error: `Not a valid backup archive: ${error.message}` });
-      return true;
-    }
-
-    const rawTables = {};
-    let manifest = null;
-    for (const entry of entries) {
-      try {
-        if (entry.name === 'manifest.json') {
-          manifest = JSON.parse(entry.data.toString('utf8'));
-        } else if (entry.name.startsWith('tables/') && entry.name.endsWith('.json')) {
-          const tableName = entry.name.slice('tables/'.length, -'.json'.length);
-          rawTables[tableName] = JSON.parse(entry.data.toString('utf8'));
-        }
-      } catch (error) {
-        sendJson(res, 400, { error: `Corrupt backup archive entry "${entry.name}": ${error.message}` });
+      if (error instanceof BackupArchiveError && error.tooLarge) {
+        const limitMb = Math.round(BACKUP_UPLOAD_MAX_BYTES / (1024 * 1024));
+        sendJson(res, 413, { error: `Backup archive exceeds the ${limitMb} MB upload limit.` });
         return true;
       }
-    }
-    if (!manifest || Object.keys(rawTables).length === 0) {
-      sendJson(res, 400, { error: 'Backup archive is missing manifest.json or table data.' });
+      logger.error('backup upload failed', { err: error instanceof Error ? error.message : error });
+      sendJson(res, 500, { error: 'Could not read the uploaded archive.' });
       return true;
     }
 
     const session = await resolveSession(req);
+    let manifest = null;
+    let restoredTables = [];
     try {
-      const tables = reviveBackupTables(rawTables);
-      await restoreBackupSnapshot(tables);
+      const result = await restoreBackupArchive(upload.path);
+      manifest = result.manifest;
+      restoredTables = result.tables;
     } catch (error) {
+      if (error instanceof BackupArchiveError) {
+        sendJson(res, 400, { error: error.message });
+        return true;
+      }
       logger.error('backup restore failed', { err: error instanceof Error ? error.message : error });
       sendJson(res, 500, { error: 'Restore failed; no changes were committed.' });
       return true;
+    } finally {
+      await upload.cleanup();
     }
 
-    const restoredTables = Object.entries(rawTables).map(([name, rows]) => ({
-      name,
-      rowCount: Array.isArray(rows) ? rows.length : 0,
-    }));
     await recordAuditLog({
       actorName: session ? session.name : null,
       actorUsername: session ? session.username : null,
       actorRole: session ? session.role : null,
       action: 'backup.restore',
       target: null,
-      details: { sourceGeneratedAt: manifest.generatedAt || null, tables: restoredTables },
+      details: { sourceGeneratedAt: manifest?.generatedAt || null, tables: restoredTables },
       source: 'web',
       ip: getClientIp(req),
     });
