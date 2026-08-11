@@ -723,7 +723,7 @@ and finishes verifying it.
 
 | Method & path | Description |
 |---------------|-------------|
-| `GET /api/admin/update-status` | Compares the running image's baked commit SHA against the latest commit on the tracked GitHub branch (cached ~20 min server-side). Pass `?force=1` (the UI's "Check again" button) to bypass the TTL cache and re-poll GitHub immediately so a just-pushed commit shows up right away. Returns `{ enabled, current, latest, updateAvailable, latestCommittedAt, checkedAt, canApply, versionSource, canRollback, rollbackTarget, pinnedVersion, activeRunId }`. When `UPDATE_CHECK_REPO` is unset → `{ enabled: false, current }`. On an upstream failure the run/rollback fields are still returned alongside `error`. `versionSource` is `baked` (a real commit SHA, the only comparable case), `dev`, or `build-id`; `updateAvailable` is never true unless it is `baked`. `pinnedVersion` is set when the running version is the result of a deliberate rollback, so the UI reports "pinned" instead of re-offering the update that was just reverted. Cached `no-store`. |
+| `GET /api/admin/update-status` | Compares the running image's baked commit SHA against the newest image **published to Docker Hub** (cached ~20 min server-side): it reads the moving tag (`UPDATE_CHECK_TAG`, default `latest`), then resolves that digest back to the immutable `sha-<12>` tag CI pushed with it, so an update is only reported once it is actually pullable — a commit CI hasn't built yet, or whose build failed, never shows one. Pass `?force=1` (the UI's "Check again" button) to bypass the TTL cache and re-poll the registry immediately so a just-published image shows up right away. Returns `{ enabled, current, latest, updateAvailable, latestCommittedAt, checkedAt, canApply, versionSource, canRollback, rollbackTarget, pinnedVersion, activeRunId }`. When `UPDATE_CHECK_IMAGE` is unset (it defaults to `<IMAGE_PREFIX>/printfarm`) → `{ enabled: false, current }`. `latest` is the 12-char SHA from the published tag and `latestCommittedAt` is that image's push time (the field name predates the switch from the GitHub commit check); the comparison is prefix-based in both directions, so a 12-char tag matches the full 40-char baked SHA. On an upstream failure the run/rollback fields are still returned alongside `error`. `versionSource` is `baked` (a real commit SHA, the only comparable case), `dev`, or `build-id`; `updateAvailable` is never true unless it is `baked`. `pinnedVersion` is set when the running version is the result of a deliberate rollback, so the UI reports "pinned" instead of re-offering the update that was just reverted. Cached `no-store`. |
 | `GET /api/admin/update/preflight` | Runs the pre-flight checks with no side effects. `?kind=update` (default) or `rollback`. Returns `{ ok, blocking, checks: [{ id, label, severity, ok, detail }] }`. See the check table below. |
 | `GET /api/admin/update/runs?limit=20` | Update history, newest first (limit 1–100, default 20). `{ runs: [...] }`. |
 | `GET /api/admin/update/runs/active` | The in-flight run and its log, or `{ run: null, events: [] }`. Polled by the UI every 3 s. |
@@ -1532,6 +1532,11 @@ Prometheus exposition of the web tier's own request metrics
 `/metrics` on the public site; Prometheus scrapes `web:5173/metrics` directly
 over the compose network. Carries no secrets. Distinct from the `exporter`
 service, which exposes the print-farm *data* metrics (`printfarm_*`) from Postgres.
+
+In the **single-container** build there is no nginx to 404 it and the web
+listener *is* the public port, so setting `METRICS_LISTEN_PORT` (default `9181`
+there) moves this endpoint onto its own listener — `/metrics` on the public port
+then returns `404` like any other unknown path.
 
 Every response (on all endpoints) carries an `X-Request-Id` header, echoed in the
 server's access log line (`reqId`) for correlation; a client may supply its own

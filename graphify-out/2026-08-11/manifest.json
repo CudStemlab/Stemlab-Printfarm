@@ -345,8 +345,8 @@
     "semantic_hash": "27cf1e3591e961fcb8ee9033cd85bab4"
   },
   "server/app.js": {
-    "mtime": 1786472927.7570648,
-    "ast_hash": "fbcddfd5d8b3d0a0c8da03dfb72cac68",
+    "mtime": 1786269752.5506113,
+    "ast_hash": "0beb9ce141ebce019efec1b3ac9219d4",
     "semantic_hash": ""
   },
   "server/bambuCamera.js": {
@@ -370,8 +370,8 @@
     "semantic_hash": "fe8441176f9a026d2711d5ee86b8a63d"
   },
   "server/postgres.js": {
-    "mtime": 1786270544.7505336,
-    "ast_hash": "5b9138fdcd641b879a751863f4e74256",
+    "mtime": 1786270018.8772843,
+    "ast_hash": "bf97130699befe66f0791715fdaa8866",
     "semantic_hash": ""
   },
   "server/redis.js": {
@@ -395,8 +395,8 @@
     "semantic_hash": "c25e1b4913ad90d86caf72591783f425"
   },
   "slicer-proxy/index.js": {
-    "mtime": 1786466412.020041,
-    "ast_hash": "6ac31441ab2745474dcae4f63be2aac6",
+    "mtime": 1784216551.2902331,
+    "ast_hash": "f51104faff54e6c96d1046145c137e37",
     "semantic_hash": ""
   },
   "slicer-proxy/octoprintDevice.js": {
@@ -490,8 +490,8 @@
     "semantic_hash": ""
   },
   "src/app/components/SoftwareUpdateSettings.tsx": {
-    "mtime": 1786472999.2073739,
-    "ast_hash": "50ca4bb388f9750126fea50aea8bd5e8",
+    "mtime": 1785304469.8269093,
+    "ast_hash": "8695257fc1fa315c75cf3817c63ff8c1",
     "semantic_hash": ""
   },
   "src/app/components/SpoolIndicator.tsx": {
@@ -860,8 +860,8 @@
     "semantic_hash": ""
   },
   "src/app/lib/updateApi.ts": {
-    "mtime": 1786472999.1921475,
-    "ast_hash": "63c004449a85c64703aed693143f5dce",
+    "mtime": 1785304469.8269093,
+    "ast_hash": "5541cca67969df114ac953ae568df523",
     "semantic_hash": ""
   },
   "src/app/lib/useAutoRefresh.ts": {
@@ -965,23 +965,23 @@
     "semantic_hash": ""
   },
   ".github/workflows/deploy.yml": {
-    "mtime": 1786471950.167007,
-    "ast_hash": "1e04bdb8c344fd08e82e4c75b170b5d0",
+    "mtime": 1785304469.8039095,
+    "ast_hash": "83b97c3ed4334228461b56c387399e3f",
     "semantic_hash": ""
   },
   "API.md": {
-    "mtime": 1786473015.6353009,
-    "ast_hash": "c574d21d716f7787beab810d60a43a27",
+    "mtime": 1786269928.748187,
+    "ast_hash": "cf64769eadcc36021a013d2291d826c7",
     "semantic_hash": ""
   },
   "CLAUDE.md": {
-    "mtime": 1786473039.2098577,
-    "ast_hash": "7b9468431b121e786c64a415186e58d1",
+    "mtime": 1786270061.9464386,
+    "ast_hash": "15a0c579a4f95896e6c9d36cfbde41b4",
     "semantic_hash": ""
   },
   "README.md": {
-    "mtime": 1786473039.225397,
-    "ast_hash": "c504c2afdc61d5d2116951beefdfa95e",
+    "mtime": 1784665753.7586,
+    "ast_hash": "0575b6ff127b6e4e387279d31be874a9",
     "semantic_hash": ""
   },
   "SECURITY.md": {
@@ -995,18 +995,18 @@
     "semantic_hash": ""
   },
   "agent.md": {
-    "mtime": 1786467811.8683114,
-    "ast_hash": "41eb54f8312c9dad949f47385923bcf9",
-    "semantic_hash": ""
+    "mtime": 1781729849.1967216,
+    "ast_hash": "f542fcd4c4a5f6fe2b737875c88d4ae0",
+    "semantic_hash": "f542fcd4c4a5f6fe2b737875c88d4ae0"
   },
   "docker-compose.deploy.yml": {
-    "mtime": 1786472540.3978457,
-    "ast_hash": "85449dab50663020cf3e7d6a7a2c3eca",
+    "mtime": 1785304469.8049095,
+    "ast_hash": "b9d12df3905d912ead93fa82a845f707",
     "semantic_hash": ""
   },
   "docker-compose.yml": {
-    "mtime": 1786473127.8524144,
-    "ast_hash": "bf2120bc92ab2b48e7f2fa6da8523bd5",
+    "mtime": 1786269889.4430537,
+    "ast_hash": "5d27ed57d7321033b45b8c09c86a4b2f",
     "semantic_hash": ""
   },
   "exporter/requirements.txt": {
@@ -1025,8 +1025,8 @@
     "semantic_hash": "438d18048255102f73e3634488877e48"
   },
   "monitoring/README.md": {
-    "mtime": 1786467830.1859536,
-    "ast_hash": "2b2972f8b99aa2396fa9acf6188af7ff",
+    "mtime": 1783016321.193066,
+    "ast_hash": "3bda30d9de6113f9a59a2ac122cd2f9d",
     "semantic_hash": ""
   },
   "monitoring/RUNBOOK.md": {
@@ -1195,7 +1195,7 @@
     "semantic_hash": ""
   },
   "src/app/components/BackupSettings.tsx": {
-    "mtime": 1786270544.7505336,
+    "mtime": 1786269874.5574448,
     "ast_hash": "66b0437f482f5d5977c71d38ef53c746",
     "semantic_hash": ""
   },
@@ -1340,8 +1340,8 @@
     "semantic_hash": ""
   },
   "mcp/index.js": {
-    "mtime": 1786466398.0848851,
-    "ast_hash": "74815b74b56ce230b0278f90711fe69f",
+    "mtime": 1784665753.7646,
+    "ast_hash": "3ba22e71085a2316f92b3524d5afd930",
     "semantic_hash": ""
   },
   "mcp/server.js": {
@@ -1390,8 +1390,8 @@
     "semantic_hash": ""
   },
   "mcp/README.md": {
-    "mtime": 1786467811.8699,
-    "ast_hash": "65b240b841ab59717483138be4b10e3d",
+    "mtime": 1784265902.1508057,
+    "ast_hash": "ecf93bfe970fa36af61c66d9918e554f",
     "semantic_hash": ""
   },
   "db/roles/least-privilege-roles.sql": {
@@ -1565,8 +1565,8 @@
     "semantic_hash": ""
   },
   ".github/workflows/rollback.yml": {
-    "mtime": 1786471966.581415,
-    "ast_hash": "062c442f735975e7e8dcff49b97a5d4d",
+    "mtime": 1785304469.8039095,
+    "ast_hash": "1b141c4c64033c295fa08527e9b25d3b",
     "semantic_hash": ""
   },
   "go-services/cmd/poller/bambumerge.go": {
@@ -1585,48 +1585,23 @@
     "semantic_hash": ""
   },
   "server/backupArchive.js": {
-    "mtime": 1786270544.7495337,
-    "ast_hash": "804daced37f0a4e472989b9f6e314d3c",
+    "mtime": 1786269951.302295,
+    "ast_hash": "62a0350746fee7e07fb7836d1016a94a",
     "semantic_hash": ""
   },
   "server/backupArchive.test.mjs": {
-    "mtime": 1786270544.7495337,
-    "ast_hash": "fbc0ebaa51369685c9530fab30be83a0",
+    "mtime": 1786269846.6746025,
+    "ast_hash": "1ce093f607190bf79afd28c3fd66fd72",
     "semantic_hash": ""
   },
   "server/zipStream.js": {
-    "mtime": 1786270544.7505336,
+    "mtime": 1786269457.29826,
     "ast_hash": "23ca4da00fdc1e517ccb1ce33334f93b",
     "semantic_hash": ""
   },
   "server/zipStream.test.mjs": {
-    "mtime": 1786270544.7505336,
+    "mtime": 1786269801.2590063,
     "ast_hash": "8be0b5f55ecfd659a4071ebab507c87d",
-    "semantic_hash": ""
-  },
-  "docker/single/entrypoint.sh": {
-    "mtime": 1786466555.5126665,
-    "ast_hash": "6a55248b3e45a2162f6e693c02627314",
-    "semantic_hash": ""
-  },
-  "mcp/httpHandler.js": {
-    "mtime": 1786466385.4927447,
-    "ast_hash": "9e8c3f56b93236278c4f0efda0c5e036",
-    "semantic_hash": ""
-  },
-  "docker-compose.multi.yml": {
-    "mtime": 1786473143.5115223,
-    "ast_hash": "4d319887ec4808565dc855bfb81d713b",
-    "semantic_hash": ""
-  },
-  "server/updateCheck.js": {
-    "mtime": 1786472876.5954986,
-    "ast_hash": "545cbfd9f99f760d0972a9fa73d186af",
-    "semantic_hash": ""
-  },
-  "server/updateCheck.test.mjs": {
-    "mtime": 1786472956.9453888,
-    "ast_hash": "b2b892feccc02d3777fae363dccb9ec0",
     "semantic_hash": ""
   }
 }

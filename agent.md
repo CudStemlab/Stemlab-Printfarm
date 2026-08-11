@@ -16,7 +16,8 @@ Main parts:
 - `server/`: lightweight Node API middleware used by the web container.
 - `poller/`: Python background service for printer status refresh.
 - `nginx/`: reverse proxy configuration.
-- `docker-compose.yml`: local full-stack runtime with PostgreSQL, web, nginx, and poller.
+- `docker-compose.yml`: default single-container runtime (`Dockerfile.single`) with PostgreSQL, web, poller and exporter in one image.
+- `docker-compose.multi.yml`: original split runtime with PostgreSQL, web, nginx, poller and the rest as separate containers.
 
 ## Operational Behavior
 

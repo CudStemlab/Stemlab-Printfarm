@@ -53,10 +53,12 @@ If you change the exporter's port, update **both** `EXPORTER_PORT` and the
 
 ### Docker Compose
 
-Prometheus and the exporter come up with the rest of the stack:
+Prometheus ships only with the **multi-container** stack; the default
+single-container stack runs the exporter but no Prometheus (scrape it from an
+external Prometheus at `:9180`, and the web tier's own metrics at `:9181`).
 
 ```bash
-docker compose up --build
+docker compose -f docker-compose.multi.yml up --build
 ```
 
 - Prometheus UI: <http://localhost:8080/prometheus> — Prometheus has **no**
@@ -80,8 +82,8 @@ docker compose up --build
 Inspect just these services:
 
 ```bash
-docker compose logs -f prometheus
-docker compose logs -f exporter
+docker compose -f docker-compose.multi.yml logs -f prometheus
+docker compose -f docker-compose.multi.yml logs -f exporter
 # Prometheus readiness, via nginx (needs -u if PROMETHEUS_BASIC_AUTH_PASSWORD is set):
 curl -s http://localhost:8080/prometheus/-/ready
 curl -s -u admin:yourpassword http://localhost:8080/prometheus/-/ready
@@ -117,7 +119,7 @@ healthy:
 - **Status → Targets** — the `printfarm` job (`exporter:9180`) should be `UP`.
 - **Graph** — run `printfarm_scrape_success`. `1` means the last scrape read the
   database; `0` means the exporter couldn't reach PostgreSQL (the exporter stays
-  up and reports `0` rather than crashing — check `docker compose logs exporter`).
+  up and reports `0` rather than crashing — check `docker compose logs exporter` (single container) or `docker compose -f docker-compose.multi.yml logs exporter`).
 
 ## Connecting Grafana
 
@@ -322,7 +324,7 @@ sum(irate(printfarm_web_response_bytes_total[5m]))               # out, last-2-s
 
 | Symptom | Likely cause / fix |
 |---------|--------------------|
-| `printfarm` target `DOWN` in Status → Targets | Exporter not running or wrong port. Check `docker compose logs exporter`; confirm the target matches `EXPORTER_PORT`. |
+| `printfarm` target `DOWN` in Status → Targets | Exporter not running or wrong port. Check the exporter's logs; confirm the target matches `EXPORTER_PORT`. |
 | `printfarm_scrape_success` is `0` | Exporter can't reach PostgreSQL. Verify `DATABASE_URL` and that `db` is healthy; the exporter log prints the error. |
 | Grafana panels say "No data" | Datasource URL not reachable from Grafana, or the dashboard's datasource variable points at the wrong source. Re-check the URL in the datasource provisioning file. |
 | Metrics history gaps after an analytics reset | Expected — `Reset analytics` resets the cumulative counters; use `rate()`/`increase()` which tolerate counter resets. |

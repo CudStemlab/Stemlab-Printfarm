@@ -200,8 +200,6 @@
   "198": "devDependencies",
   "199": "send_discord_embed",
   "200": "scripts",
-  "201": "update_bambu_filament_used",
-  "202": "grab_mjpeg_frame",
   "206": "SSO public URL (`/api/settings/sso-public-url`)",
   "208": "envInt",
   "210": "Mutex",

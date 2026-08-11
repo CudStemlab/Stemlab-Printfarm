@@ -1,4 +1,4 @@
-name: Build and Push Images
+name: Build and Push Image
 
 on:
   push:
@@ -11,7 +11,7 @@ jobs:
 
     env:
       # Forks set DOCKERHUB_USERNAME in repo secrets; it's the push registry
-      # prefix for the built images.
+      # prefix for the built image.
       IMAGE_PREFIX: ${{ secrets.DOCKERHUB_USERNAME }}
 
     steps:
@@ -29,72 +29,43 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      # Every image gets an immutable `sha-<12>` tag alongside the moving
-      # `latest`. That per-commit tag is what makes rollback possible: the admin
-      # "Roll back" button dispatches .github/workflows/rollback.yml, which
-      # re-points `latest` at one of these tags (see docker-compose.deploy.yml).
+      # ONE image. Dockerfile.single is the whole farm — PostgreSQL, the Node web
+      # server (with the slicer proxy and MCP server embedded), the Go poller and
+      # the Go exporter — matching the default docker-compose.yml. The old
+      # per-service images (printfarm-web/-nginx/-poller/-exporter/-slicer-proxy/
+      # -mcp) are no longer published; build the multi-container stack from source
+      # with `docker compose -f docker-compose.multi.yml up --build`.
+      #
+      # The image gets an immutable `sha-<12>` tag alongside the moving `latest`.
+      # That per-commit tag is what makes rollback possible: the admin "Roll back"
+      # button dispatches .github/workflows/rollback.yml, which re-points `latest`
+      # at one of these tags (see docker-compose.deploy.yml).
       # 12 hex chars, not 7 — 7 starts colliding on a long-lived repo.
       - name: Derive short SHA
         run: echo "SHORT_SHA=$(echo '${{ github.sha }}' | cut -c1-12)" >> "$GITHUB_ENV"
 
-      - name: Build web image
+      - name: Build image
         run: |
           docker build \
-            -f Dockerfile.web \
+            -f Dockerfile.single \
             --build-arg VITE_PUBLIC_VIEWER_MODE='${{ vars.PUBLIC_VIEWER_MODE || 'false' }}' \
             --build-arg APP_VERSION='${{ github.sha }}' \
-            -t "${IMAGE_PREFIX}/printfarm-web:latest" \
-            -t "${IMAGE_PREFIX}/printfarm-web:sha-${SHORT_SHA}" .
+            -t "${IMAGE_PREFIX}/printfarm:latest" \
+            -t "${IMAGE_PREFIX}/printfarm:sha-${SHORT_SHA}" .
 
-      - name: Build poller image
-        run: |
-          docker build \
-            -f Dockerfile.go \
-            --build-arg SERVICE=poller \
-            -t "${IMAGE_PREFIX}/printfarm-poller:latest" \
-            -t "${IMAGE_PREFIX}/printfarm-poller:sha-${SHORT_SHA}" .
-
-      - name: Build nginx image
-        run: |
-          docker build \
-            -f Dockerfile.nginx \
-            -t "${IMAGE_PREFIX}/printfarm-nginx:latest" \
-            -t "${IMAGE_PREFIX}/printfarm-nginx:sha-${SHORT_SHA}" .
-
-      - name: Build exporter image
-        run: |
-          docker build \
-            -f Dockerfile.go \
-            --build-arg SERVICE=exporter \
-            -t "${IMAGE_PREFIX}/printfarm-exporter:latest" \
-            -t "${IMAGE_PREFIX}/printfarm-exporter:sha-${SHORT_SHA}" .
-
-      - name: Build slicer-proxy image
-        run: |
-          docker build \
-            -f Dockerfile.slicer-proxy \
-            -t "${IMAGE_PREFIX}/printfarm-slicer-proxy:latest" \
-            -t "${IMAGE_PREFIX}/printfarm-slicer-proxy:sha-${SHORT_SHA}" .
-
-      - name: Build mcp image
-        run: |
-          docker build \
-            -f Dockerfile.mcp \
-            -t "${IMAGE_PREFIX}/printfarm-mcp:latest" \
-            -t "${IMAGE_PREFIX}/printfarm-mcp:sha-${SHORT_SHA}" .
-
-      # Push the immutable sha-* tags BEFORE latest, so a rollback target always
+      # Push the immutable sha-* tag BEFORE latest, so a rollback target always
       # exists for anything `latest` has ever pointed at. If the run dies between
       # the two steps the worst case is a published version nobody is running,
       # rather than a running version nobody can roll back to.
-      - name: Push sha-tagged images
-        run: |
-          for svc in web poller nginx exporter slicer-proxy mcp; do
-            docker push "${IMAGE_PREFIX}/printfarm-${svc}:sha-${SHORT_SHA}"
-          done
+      - name: Push sha-tagged image
+        run: docker push "${IMAGE_PREFIX}/printfarm:sha-${SHORT_SHA}"
 
-      - name: Push latest images
+      - name: Push latest image
+        run: docker push "${IMAGE_PREFIX}/printfarm:latest"
+
+      - name: Summary
         run: |
-          for svc in web poller nginx exporter slicer-proxy mcp; do
-            docker push "${IMAGE_PREFIX}/printfarm-${svc}:latest"
-          done
+          echo "### Published \`${IMAGE_PREFIX}/printfarm\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- \`sha-${SHORT_SHA}\` (immutable, rollback target)" >> "$GITHUB_STEP_SUMMARY"
+          echo "- \`latest\` (what Watchtower pulls)" >> "$GITHUB_STEP_SUMMARY"

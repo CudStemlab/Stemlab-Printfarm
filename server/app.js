@@ -159,6 +159,7 @@ import {
 } from './bambuCamera.js';
 import { runUpdatePreflight } from './updatePreflight.js';
 import { normalizeSha, pollRollbackWorkflow, triggerRollbackWorkflow } from './updateRollback.js';
+import { DOCKER_REPO_PATTERN, resolvePublishedVersion } from './updateCheck.js';
 
 // Bambu Lab printers share one LAN integration (MQTT status/commands, port-6000
 // camera), so they're grouped rather than matched by a single model id.
@@ -204,6 +205,66 @@ const BACKUP_UPLOAD_MAX_BYTES = Number.parseInt(
 );
 // Print-request intake only accepts printable mesh formats (STL / 3MF / OBJ).
 const QUEUE_ALLOWED_FILE_EXT = new Set(['.stl', '.3mf', '.obj']);
+
+// ---------------------------------------------------------------------------
+// Single-container mode
+//
+// The default deployment splits the app across containers (web, slicer-proxy,
+// mcp, nginx, ...). The all-in-one image (Dockerfile.single) instead runs the
+// slicer proxy and the MCP server inside THIS process and drops nginx, so this
+// listener is the public port. Three env vars switch that on; every one of them
+// is off by default, leaving the multi-container behavior byte-identical.
+//
+//   EMBED_SLICER_PROXY=true  mount slicer-proxy/index.js at /printers/
+//   EMBED_MCP=true           mount mcp/httpHandler.js at /mcp
+//   METRICS_LISTEN_PORT=n    move /metrics off the public port onto its own
+//                            listener (nginx used to 404 it publicly)
+const EMBED_SLICER_PROXY = process.env.EMBED_SLICER_PROXY === 'true';
+const EMBED_MCP = process.env.EMBED_MCP === 'true';
+const METRICS_LISTEN_PORT = Number.parseInt(process.env.METRICS_LISTEN_PORT || '0', 10) || 0;
+// Fail-closed like the nginx gate it replaces: the embedded MCP path answers 403
+// unless explicitly published. Internal callers of a standalone mcp container
+// were never affected by this flag and still aren't.
+const MCP_HTTP_PUBLIC = process.env.MCP_HTTP_PUBLIC === 'true';
+// Whether X-Real-IP / X-Forwarded-For may be believed (see getClientIp). True by
+// default because the split stack always has nginx in front; the single-container
+// compose file sets it false unless an external reverse proxy is configured.
+const TRUST_PROXY_HEADERS = (process.env.TRUST_PROXY_HEADERS ?? 'true') !== 'false';
+
+// Populated below by dynamic import when the corresponding EMBED_* flag is set —
+// static imports would pull the proxy's DB/FTP/MQTT stack and the MCP SDK into
+// every multi-container web image, where neither is installed.
+let embeddedSlicerProxy = null;
+let embeddedMcpHandler = null;
+
+// Mirrors the nginx `location /printers/` block: the slicer's base URL is
+// /printers/<id>, and its "Device" tab also hits the bare /printers/<id> with no
+// trailing slash.
+function isSlicerProxyPath(pathname) {
+  return pathname === '/printers' || pathname.startsWith('/printers/');
+}
+
+// Mirrors the nginx `location /mcp` block (prefix match, so /mcp and /mcp/... ).
+function isMcpPath(pathname) {
+  return pathname === '/mcp' || pathname.startsWith('/mcp/');
+}
+
+async function loadEmbeddedServices() {
+  if (EMBED_SLICER_PROXY) {
+    const mod = await import('../slicer-proxy/index.js');
+    embeddedSlicerProxy = mod.handleSlicerProxyRequest;
+    logger.info('embedded slicer proxy mounted', { path: '/printers/' });
+  }
+  if (EMBED_MCP) {
+    const mod = await import('../mcp/httpHandler.js');
+    // Loopback back into this same process's /api/v1 surface: the MCP server is
+    // a thin API client, so it authenticates with the caller's key exactly as it
+    // does over the network — no privileged in-process shortcut.
+    const apiBase = process.env.PRINTFARM_API_BASE || `http://127.0.0.1:${process.env.PORT || 5173}`;
+    embeddedMcpHandler = mod.createMcpHttpHandler({ apiBase });
+    logger.info('embedded mcp server mounted', { path: '/mcp', public: MCP_HTTP_PUBLIC });
+  }
+}
 
 // Google Form (print-request) URL — retained for the Settings → Integrations
 // override, though the in-app form at /request is now the primary intake path.
@@ -1105,12 +1166,13 @@ function runningVersion() {
   return APP_VERSION || BUILD_ID;
 }
 
-// Whether runningVersion() is a real git SHA we can compare against GitHub, or
-// just the index.html hash we fall back to. This distinction matters: BUILD_ID is
-// 16 hex chars that never equal 'dev' and never prefix-match a commit SHA, so a
-// bare `node server/app.js` run (no Docker, so no baked APP_VERSION) with
-// UPDATE_CHECK_REPO set would otherwise report a permanent, un-actionable
-// "update available". Treat anything that isn't a stamped SHA as unstamped.
+// Whether runningVersion() is a real git SHA we can compare against the
+// published image's sha-* tag, or just the index.html hash we fall back to. This
+// distinction matters: BUILD_ID is 16 hex chars that never equal 'dev' and never
+// prefix-match a commit SHA, so a bare `node server/app.js` run (no Docker, so no
+// baked APP_VERSION) with the check configured would otherwise report a
+// permanent, un-actionable "update available". Treat anything that isn't a
+// stamped SHA as unstamped.
 function versionSource() {
   if (!APP_VERSION) return 'build-id';
   if (APP_VERSION === 'dev') return 'dev';
@@ -1120,14 +1182,36 @@ function isVersionComparable() {
   return versionSource() === 'baked';
 }
 
-// Admin "update available" check config. UPDATE_CHECK_REPO ("owner/repo") turns
-// the feature on; when unset the endpoint reports { enabled: false } and the UI
-// hides the card. UPDATE_CHECK_TOKEN (optional) lifts GitHub's 60-req/hr
-// unauthenticated limit / reaches private repos. The one-click apply calls a
-// Watchtower sidecar's HTTP API (WATCHTOWER_URL + WATCHTOWER_TOKEN).
+// Admin "update available" check config.
+//
+// The check asks DOCKER HUB what is published, not GitHub what is committed —
+// because a commit is not installable until CI has built and pushed it. Under
+// the old GitHub check, pushing to main immediately showed "update available"
+// and an admin who pulled during the ~5 minutes CI takes would get the *old*
+// image and be told to update again; a failed build showed an update that could
+// never be applied at all. The registry is the only source that answers the
+// question actually being asked: is there a newer image I can pull right now?
+//
+// UPDATE_CHECK_IMAGE ("namespace/repo" on Docker Hub) turns the feature on —
+// it defaults to <IMAGE_PREFIX>/printfarm, so setting IMAGE_PREFIX alone is
+// enough. When neither is set the endpoint reports { enabled: false } and the
+// UI hides the card. UPDATE_CHECK_TOKEN (optional) is sent as a bearer token
+// for private repositories / a higher rate limit.
+//
+// UPDATE_CHECK_REPO ("owner/repo") is still needed, but only for ROLLBACK: it
+// is the repository whose rollback.yml workflow gets dispatched.
 const UPDATE_CHECK_REPO = (process.env.UPDATE_CHECK_REPO || '').trim();
 const UPDATE_CHECK_BRANCH = (process.env.UPDATE_CHECK_BRANCH || 'main').trim();
 const UPDATE_CHECK_TOKEN = (process.env.UPDATE_CHECK_TOKEN || '').trim();
+const IMAGE_PREFIX = (process.env.IMAGE_PREFIX || '').trim();
+const UPDATE_CHECK_IMAGE = (
+  process.env.UPDATE_CHECK_IMAGE || (IMAGE_PREFIX ? `${IMAGE_PREFIX}/printfarm` : '')
+).trim();
+// The moving tag a host actually pulls. Its digest is resolved back to the
+// immutable sha-<12> tag CI pushed alongside it, which is what gets compared
+// against the running APP_VERSION.
+const UPDATE_CHECK_TAG = (process.env.UPDATE_CHECK_TAG || 'latest').trim();
+
 const UPDATE_CHECK_TTL_MS = Number.parseInt(process.env.UPDATE_CHECK_TTL_MS || String(20 * 60 * 1000), 10);
 const WATCHTOWER_URL = (process.env.WATCHTOWER_URL || 'http://watchtower:8080/v1/update').trim();
 const WATCHTOWER_TOKEN = (process.env.WATCHTOWER_TOKEN || '').trim();
@@ -1147,38 +1231,64 @@ const UPDATE_HEALTH_PASSES = Math.max(1, Number.parseInt(process.env.UPDATE_HEAL
 // Minimum spacing between the health probes that make up those passes — three
 // checks a millisecond apart would prove nothing about a container that stays up.
 const UPDATE_HEALTH_PASS_SPACING_MS = 5000;
-// Cached latest-commit lookup, shared across admins so GitHub is polled at most
-// once per TTL regardless of how many browsers are watching.
-let updateCheckCache = null; // { latest, latestCommittedAt, checkedAt }
+// Cached published-image lookup, shared across admins so Docker Hub is polled at
+// most once per TTL regardless of how many browsers are watching. The field name
+// `latestCommittedAt` is kept (the client already reads it) but now carries the
+// image's push time rather than a commit date.
+let updateCheckCache = null; // { latest, latestCommittedAt, checkedAt, digest, matchedByDigest }
 
-async function fetchLatestCommit(force = false) {
-  if (!UPDATE_CHECK_REPO) return null;
-  const now = Date.now();
-  // A manual "Check again" (force) bypasses the TTL cache so a just-pushed
-  // commit shows up immediately instead of after the cache window.
-  if (!force && updateCheckCache && now - updateCheckCache.checkedAt < UPDATE_CHECK_TTL_MS) {
-    return updateCheckCache;
-  }
-  const url = `https://api.github.com/repos/${UPDATE_CHECK_REPO}/commits/${encodeURIComponent(UPDATE_CHECK_BRANCH)}`;
-  const headers = { Accept: 'application/vnd.github+json', 'User-Agent': 'printfarm-update-check' };
+async function hubFetch(path) {
+  const headers = { Accept: 'application/json', 'User-Agent': 'printfarm-update-check' };
+  // Private repositories / a higher rate limit. Anonymous works for public ones.
   if (UPDATE_CHECK_TOKEN) headers.Authorization = `Bearer ${UPDATE_CHECK_TOKEN}`;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 8000);
   try {
-    const resp = await fetch(url, { headers, signal: controller.signal });
+    const resp = await fetch(`https://hub.docker.com/v2/repositories/${path}`, {
+      headers,
+      signal: controller.signal,
+    });
     if (!resp.ok) {
-      throw new Error(`GitHub responded ${resp.status}`);
+      // Message stays generic: it reaches an admin-visible error field, and the
+      // registry path can carry a private namespace.
+      throw new Error(`registry responded ${resp.status}`);
     }
-    const data = await resp.json();
-    const latest = typeof data?.sha === 'string' ? data.sha : null;
-    if (!latest) throw new Error('GitHub response missing sha');
-    const latestCommittedAt =
-      data?.commit?.committer?.date || data?.commit?.author?.date || null;
-    updateCheckCache = { latest, latestCommittedAt, checkedAt: now };
-    return updateCheckCache;
+    return await resp.json();
   } finally {
     clearTimeout(timer);
   }
+}
+
+// Resolves what a `docker compose pull` would actually bring down: the digest
+// behind the moving tag, mapped back to the immutable sha-<12> tag CI pushed with
+// it, which is directly comparable to the running APP_VERSION.
+async function fetchLatestPublishedVersion(force = false) {
+  if (!UPDATE_CHECK_IMAGE) return null;
+  if (!DOCKER_REPO_PATTERN.test(UPDATE_CHECK_IMAGE)) {
+    throw new Error('UPDATE_CHECK_IMAGE is not a valid "namespace/repository" name');
+  }
+  const now = Date.now();
+  // A manual "Check again" (force) bypasses the TTL cache so a just-pushed image
+  // shows up immediately instead of after the cache window.
+  if (!force && updateCheckCache && now - updateCheckCache.checkedAt < UPDATE_CHECK_TTL_MS) {
+    return updateCheckCache;
+  }
+
+  const moving = await hubFetch(
+    `${UPDATE_CHECK_IMAGE}/tags/${encodeURIComponent(UPDATE_CHECK_TAG)}`,
+  );
+  // Newest first, so resolvePublishedVersion's fallback picks the latest build.
+  const list = await hubFetch(`${UPDATE_CHECK_IMAGE}/tags?page_size=100&ordering=last_updated`);
+  const resolved = resolvePublishedVersion(moving, list?.results);
+
+  updateCheckCache = {
+    latest: resolved.version,
+    latestCommittedAt: resolved.publishedAt,
+    checkedAt: now,
+    digest: resolved.digest,
+    matchedByDigest: resolved.matchedByDigest,
+  };
+  return updateCheckCache;
 }
 
 const port = Number.parseInt(process.env.PORT || '5173', 10);
@@ -1393,7 +1503,16 @@ function staffUserWithHash(record) {
 // header), then the socket peer. Reading the rightmost token means a client that
 // injects its own `X-Forwarded-For: <fake>` can no longer mint a fresh rate-limit
 // bucket per request.
+//
+// That reasoning holds only while a trusted proxy is actually in front. In the
+// single-container build nginx is gone, so unless an external reverse proxy sets
+// these headers the peer is the client itself and every forwarding header is
+// attacker-supplied — TRUST_PROXY_HEADERS=false ignores them and uses the socket
+// peer alone. Default stays true (the multi-container stack always has nginx).
 function getClientIp(req) {
+  if (!TRUST_PROXY_HEADERS) {
+    return req.socket?.remoteAddress || null;
+  }
   const realIp = req.headers['x-real-ip'];
   if (typeof realIp === 'string' && realIp.trim()) {
     return realIp.trim();
@@ -4804,16 +4923,16 @@ async function handleApi(req, res, requestUrl) {
   }
 
   // Admin software-update check. Compares the running image's baked commit SHA
-  // against the latest commit on the configured GitHub branch (cached ~20 min),
-  // so an admin sees "update available" without SSH-ing into the host. Admin-only
-  // (classified in isSensitiveRead); reveals no secrets.
+  // against the newest image PUBLISHED to Docker Hub (cached ~20 min), so an
+  // admin sees "update available" only once there is something they can actually
+  // pull. Admin-only (classified in isSensitiveRead); reveals no secrets.
   if (requestUrl.pathname === '/api/admin/update-status' && req.method === 'GET') {
     const current = runningVersion();
-    if (!UPDATE_CHECK_REPO) {
+    if (!UPDATE_CHECK_IMAGE) {
       sendJson(res, 200, { enabled: false, current }, 'no-store');
       return true;
     }
-    // Surfaced even when the GitHub check fails, so the card can still show an
+    // Surfaced even when the registry check fails, so the card can still show an
     // in-flight run and offer a rollback after a bad deploy.
     const [activeRun, pinnedRun, lastGood] = await Promise.all([
       getActiveUpdateRun().catch(() => null),
@@ -4825,10 +4944,11 @@ async function handleApi(req, res, requestUrl) {
     const rollbackTarget = normalizeSha(lastGood?.fromVersion);
     try {
       const force = requestUrl.searchParams.get('force') === '1';
-      const info = await fetchLatestCommit(force);
+      const info = await fetchLatestPublishedVersion(force);
       const latest = info?.latest || null;
-      // Treat a commit as an update only when we know both sides and they differ.
-      // A short SHA baked at build time still matches via prefix comparison.
+      // Treat a published image as an update only when we know both sides and
+      // they differ. `latest` is the 12-char sha-* tag and `current` the full
+      // 40-char baked SHA, so the comparison is prefix-based in both directions.
       // isVersionComparable() rules out builds with no stamped SHA, which would
       // otherwise never match and report a permanent phantom update.
       const updateAvailable = Boolean(
@@ -6500,9 +6620,40 @@ async function handleRequest(req, res) {
     // Prometheus scrape of the web tier's own request metrics. Intentionally
     // internal — nginx returns 404 for /metrics; Prometheus scrapes web:5173
     // directly over the compose network. Carries no secrets.
+    //
+    // In the single-container build there is no nginx to 404 it, and this port
+    // IS the public one, so METRICS_LISTEN_PORT moves the scrape endpoint to its
+    // own listener (see below) and this path becomes a 404 like any other.
+    if (METRICS_LISTEN_PORT) {
+      sendJson(res, 404, { error: 'Not found' });
+      return;
+    }
     res.setHeader('Content-Type', 'text/plain; version=0.0.4; charset=utf-8');
     res.setHeader('Cache-Control', 'no-store');
     res.end(renderMetrics());
+    return;
+  }
+
+  // Single-container build: the slicer proxy and the MCP server run inside this
+  // process instead of as their own containers behind nginx. Path prefixes match
+  // the nginx locations they replace exactly, so slicer/MCP clients see the same
+  // URLs. Each mounted surface keeps its own authentication (the proxy's
+  // X-Api-Key check, MCP's printfarm_manage key on initialize) — nothing here
+  // widens access.
+  if (embeddedSlicerProxy && isSlicerProxyPath(requestUrl.pathname)) {
+    await embeddedSlicerProxy(req, res);
+    return;
+  }
+
+  if (embeddedMcpHandler && isMcpPath(requestUrl.pathname)) {
+    // Fail-closed, mirroring nginx/docker-entrypoint.d/15-mcp-access.sh: the MCP
+    // surface is a full read/write control plane, so it is 403 on the public
+    // port unless MCP_HTTP_PUBLIC=true (it stays key-gated either way).
+    if (!MCP_HTTP_PUBLIC) {
+      sendJson(res, 403, { error: 'Forbidden' });
+      return;
+    }
+    await embeddedMcpHandler(req, res);
     return;
   }
 
@@ -7175,9 +7326,40 @@ function scheduleFilamentAssignmentReplayWorker() {
 }
 scheduleFilamentAssignmentReplayWorker();
 
+// Single-container mode only: a second listener carrying just /metrics, so the
+// scrape endpoint stays off the public port now that no nginx 404s it. Bind it
+// to a host that isn't published (or publish it deliberately) — it carries no
+// secrets, only printfarm_web_* request metrics.
+if (METRICS_LISTEN_PORT) {
+  const metricsServer = createServer((req, res) => {
+    const pathname = new URL(req.url || '/', 'http://localhost').pathname;
+    if (pathname !== '/metrics') {
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Not found' }));
+      return;
+    }
+    res.writeHead(200, {
+      'Content-Type': 'text/plain; version=0.0.4; charset=utf-8',
+      'Cache-Control': 'no-store',
+    });
+    res.end(renderMetrics());
+  });
+  metricsServer.listen(METRICS_LISTEN_PORT, process.env.METRICS_LISTEN_HOST || '0.0.0.0', () => {
+    logger.info('metrics listener started', { port: METRICS_LISTEN_PORT });
+  });
+}
+
 const httpServer = createServer(handleRequest);
 httpServer.listen(port, host, () => {
   logger.info('Print Farm server listening', { host, port });
+  // Single-container mode: mount the slicer proxy / MCP server in-process. Done
+  // after listen so a failure to load one of them is logged loudly rather than
+  // preventing the dashboard from serving at all.
+  loadEmbeddedServices().catch((err) => {
+    logger.error('embedded service failed to load', {
+      error: err && err.message ? err.message : String(err),
+    });
+  });
   // Evaluate Home Assistant ⇄ printer automation rules on a background interval.
   startHaAutomationEngine();
   // ESP32 status-light MQTT broker (wss-only: WebSocket upgrade at /mqtt on

@@ -1,5 +1,6 @@
 // Admin software-update client (Settings → Maintenance). The server compares the
-// running image's baked commit SHA against the latest commit on the configured
+// running image's baked commit SHA against the newest image published to Docker
+// Hub (the moving tag's digest resolved back to its immutable sha-<12> tag) on the configured
 // GitHub branch and — when a Watchtower sidecar is wired up — applies the update
 // in place, tracking the whole thing as a durable "run" in the database.
 //
@@ -14,9 +15,11 @@ export interface UpdateStatus {
   enabled: boolean;
   // Running commit SHA baked into this image ("dev" for local builds).
   current: string | null;
-  // Latest commit SHA on the tracked branch, or null when unknown.
+  // Commit SHA of the newest PUBLISHED image (12 chars), or null when unknown.
   latest?: string | null;
   updateAvailable?: boolean;
+  // When that image was pushed to the registry (field name predates the
+  // GitHub → Docker Hub switch).
   latestCommittedAt?: string | null;
   checkedAt?: string | null;
   // A Watchtower sidecar is configured, so "Update now" can apply in place.

@@ -89,7 +89,7 @@ function CheckRow({ check }: { check: PreflightCheck }) {
 }
 
 // Admin-only "update available" card. Compares the running image's commit SHA
-// (baked at build time) against the latest published commit, runs pre-flight
+// (baked at build time) against the newest image published to the registry, runs pre-flight
 // checks, and — when a Watchtower sidecar is configured — applies the update in
 // place while tracking it as a durable server-side run.
 export function SoftwareUpdateSettings() {
@@ -128,7 +128,7 @@ export function SoftwareUpdateSettings() {
   }, []);
 
   // Manual "Check again": force a fresh GitHub poll (bypassing the server's TTL
-  // cache) so a just-pushed commit shows up right away, and keep the reload icon
+  // cache) so a just-published image shows up right away, and keep the reload icon
   // spinning for a beat so the animation is visible even when the fetch is fast.
   const handleCheck = useCallback(async () => {
     setChecking(true);
