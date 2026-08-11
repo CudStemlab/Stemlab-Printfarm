@@ -345,8 +345,8 @@
     "semantic_hash": "27cf1e3591e961fcb8ee9033cd85bab4"
   },
   "server/app.js": {
-    "mtime": 1786466644.6746926,
-    "ast_hash": "59290772acf59eb920fe1bada3a2739a",
+    "mtime": 1786472927.7570648,
+    "ast_hash": "fbcddfd5d8b3d0a0c8da03dfb72cac68",
     "semantic_hash": ""
   },
   "server/bambuCamera.js": {
@@ -490,8 +490,8 @@
     "semantic_hash": ""
   },
   "src/app/components/SoftwareUpdateSettings.tsx": {
-    "mtime": 1785304469.8269093,
-    "ast_hash": "8695257fc1fa315c75cf3817c63ff8c1",
+    "mtime": 1786472999.2073739,
+    "ast_hash": "50ca4bb388f9750126fea50aea8bd5e8",
     "semantic_hash": ""
   },
   "src/app/components/SpoolIndicator.tsx": {
@@ -860,8 +860,8 @@
     "semantic_hash": ""
   },
   "src/app/lib/updateApi.ts": {
-    "mtime": 1785304469.8269093,
-    "ast_hash": "5541cca67969df114ac953ae568df523",
+    "mtime": 1786472999.1921475,
+    "ast_hash": "63c004449a85c64703aed693143f5dce",
     "semantic_hash": ""
   },
   "src/app/lib/useAutoRefresh.ts": {
@@ -970,18 +970,18 @@
     "semantic_hash": ""
   },
   "API.md": {
-    "mtime": 1786466706.3384082,
-    "ast_hash": "cbbc82609df7d08dab27ef54e94c8361",
+    "mtime": 1786473015.6353009,
+    "ast_hash": "c574d21d716f7787beab810d60a43a27",
     "semantic_hash": ""
   },
   "CLAUDE.md": {
-    "mtime": 1786472579.3116724,
-    "ast_hash": "9d483fc43f357bfaf50075f23d4cead7",
+    "mtime": 1786473039.2098577,
+    "ast_hash": "7b9468431b121e786c64a415186e58d1",
     "semantic_hash": ""
   },
   "README.md": {
-    "mtime": 1786472609.9398973,
-    "ast_hash": "17248e9dae64078559dbd30c3c4547bc",
+    "mtime": 1786473039.225397,
+    "ast_hash": "c504c2afdc61d5d2116951beefdfa95e",
     "semantic_hash": ""
   },
   "SECURITY.md": {
@@ -1005,8 +1005,8 @@
     "semantic_hash": ""
   },
   "docker-compose.yml": {
-    "mtime": 1786472628.5237458,
-    "ast_hash": "cc38b820032845cfcfed6769cd03d21c",
+    "mtime": 1786473127.8524144,
+    "ast_hash": "bf2120bc92ab2b48e7f2fa6da8523bd5",
     "semantic_hash": ""
   },
   "exporter/requirements.txt": {
@@ -1615,8 +1615,18 @@
     "semantic_hash": ""
   },
   "docker-compose.multi.yml": {
-    "mtime": 1786472628.5397587,
-    "ast_hash": "cd899806f8a78d1fad0a90e1ea4c22ee",
+    "mtime": 1786473143.5115223,
+    "ast_hash": "4d319887ec4808565dc855bfb81d713b",
+    "semantic_hash": ""
+  },
+  "server/updateCheck.js": {
+    "mtime": 1786472876.5954986,
+    "ast_hash": "545cbfd9f99f760d0972a9fa73d186af",
+    "semantic_hash": ""
+  },
+  "server/updateCheck.test.mjs": {
+    "mtime": 1786472956.9453888,
+    "ast_hash": "b2b892feccc02d3777fae363dccb9ec0",
     "semantic_hash": ""
   }
 }

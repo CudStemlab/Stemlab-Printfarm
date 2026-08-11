@@ -158,6 +158,13 @@ services:
       # running APP_VERSION against the latest commit on UPDATE_CHECK_BRANCH.
       # UPDATE_CHECK_TOKEN (optional) lifts GitHub's unauthenticated rate limit /
       # reaches private repos. Empty repo = feature disabled (card hidden).
+      # Which Docker Hub repository the update card checks for a newer
+      # PUBLISHED image. Defaults to <IMAGE_PREFIX>/printfarm; unset + no prefix
+      # hides the card. UPDATE_CHECK_REPO below is now only used by the rollback
+      # workflow dispatch.
+      IMAGE_PREFIX: ${IMAGE_PREFIX:-}
+      UPDATE_CHECK_IMAGE: ${UPDATE_CHECK_IMAGE:-}
+      UPDATE_CHECK_TAG: ${UPDATE_CHECK_TAG:-latest}
       UPDATE_CHECK_REPO: ${UPDATE_CHECK_REPO:-}
       UPDATE_CHECK_BRANCH: ${UPDATE_CHECK_BRANCH:-main}
       UPDATE_CHECK_TOKEN: ${UPDATE_CHECK_TOKEN:-}
@@ -175,10 +182,8 @@ services:
       # `Actions: read and write` and nothing else: that way a compromised web
       # container can only re-deploy a commit CI already built, never push
       # arbitrary images. Empty = rollback button hidden, endpoint returns 503.
-      # IMAGE_PREFIX lets the server check a sha-* tag exists before offering it.
       UPDATE_ROLLBACK_TOKEN: ${UPDATE_ROLLBACK_TOKEN:-}
       UPDATE_ROLLBACK_WORKFLOW: ${UPDATE_ROLLBACK_WORKFLOW:-rollback.yml}
-      IMAGE_PREFIX: ${IMAGE_PREFIX:-}
       # Update-run lifecycle. DEADLINE_MS bounds a whole run before it is marked
       # timed_out (pull + recreate + verify); HEALTH_PASSES is how many consecutive
       # /readyz passes the new version must post before the run counts as

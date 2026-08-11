@@ -116,6 +116,13 @@ services:
       # with `docker compose up --build -d`, or `pull` + `up -d` with
       # docker-compose.deploy.yml on a host running the published image. The
       # check itself still reports when a newer commit exists.
+      # Which Docker Hub repository the update card checks for a newer
+      # PUBLISHED image. Defaults to <IMAGE_PREFIX>/printfarm; unset + no prefix
+      # hides the card. UPDATE_CHECK_REPO below is now only used by the rollback
+      # workflow dispatch.
+      IMAGE_PREFIX: ${IMAGE_PREFIX:-}
+      UPDATE_CHECK_IMAGE: ${UPDATE_CHECK_IMAGE:-}
+      UPDATE_CHECK_TAG: ${UPDATE_CHECK_TAG:-latest}
       UPDATE_CHECK_REPO: ${UPDATE_CHECK_REPO:-}
       UPDATE_CHECK_BRANCH: ${UPDATE_CHECK_BRANCH:-main}
       UPDATE_CHECK_TOKEN: ${UPDATE_CHECK_TOKEN:-}

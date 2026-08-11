@@ -158,7 +158,7 @@ The dashboard still tells you when a newer commit exists (Settings → Maintenan
 
 **Rolling back:** run `.github/workflows/rollback.yml` from the repo's Actions tab with the target commit SHA — it re-points `printfarm:latest` at that commit's immutable `sha-<12>` tag registry-side — then pull + `up -d` on the host. ⚠️ Migrations are forward-only and are *not* reverted, so the older image must tolerate the newer schema.
 
-Configure in `.env`: `IMAGE_PREFIX` (the Docker Hub namespace CI pushed the image under) and `UPDATE_CHECK_REPO` (`owner/repo`, so the admin update card can diff the running commit against the latest on GitHub).
+Configure in `.env`: `IMAGE_PREFIX` (the Docker Hub namespace CI pushed the image under — the update card checks `<IMAGE_PREFIX>/printfarm` for a newer **published** image, so it never offers a commit CI hasn't built) and `UPDATE_CHECK_REPO` (`owner/repo`, used by the rollback workflow dispatch).
 
 ### Frontend-only development
 
