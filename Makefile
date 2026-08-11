@@ -17,6 +17,17 @@ up-web:
 	APP_VERSION=$$(git rev-parse HEAD) docker compose up -d --build web
 	docker compose restart nginx
 
+# Single-container deployment (Dockerfile.single): PostgreSQL, web + embedded
+# slicer proxy/MCP, poller and exporter in ONE container. No nginx, Redis or
+# Prometheus — see README "Single-container deployment".
+.PHONY: up-single
+up-single:
+	APP_VERSION=$$(git rev-parse HEAD) docker compose -f docker-compose.single.yml up -d --build
+
+.PHONY: logs-single
+logs-single:
+	docker compose -f docker-compose.single.yml logs -f
+
 # Pull + run the CI-published images (full one-click "Update now" flow via
 # Watchtower). Requires IMAGE_PREFIX + WATCHTOWER_TOKEN in .env.
 .PHONY: up-deploy

@@ -27,6 +27,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { createServer } from 'node:http';
 import { Readable } from 'node:stream';
+import { pathToFileURL } from 'node:url';
 import busboy from 'busboy';
 import { Client as FtpClient } from 'basic-ftp';
 import mqtt from 'mqtt';
@@ -1051,8 +1052,14 @@ async function handleRequest(req, res) {
   sendJson(res, 404, { error: 'Not found' });
 }
 
-const server = createServer((req, res) => {
-  handleRequest(req, res).catch((error) => {
+// Node-style (req, res) entry point with the same error envelope the standalone
+// server uses. Exported so the single-container build can mount the whole proxy
+// in-process under the web server's /printers/ path (server/app.js,
+// EMBED_SLICER_PROXY=true) instead of running it as a second Node process behind
+// nginx. Routing, auth and dispatch are identical either way — only the listener
+// differs.
+export function handleSlicerProxyRequest(req, res) {
+  return handleRequest(req, res).catch((error) => {
     console.error(error);
     if (!res.headersSent) {
       sendJson(res, 500, { error: error instanceof Error ? error.message : 'Request failed' });
@@ -1060,8 +1067,23 @@ const server = createServer((req, res) => {
       res.end();
     }
   });
-});
+}
 
-server.listen(port, host, () => {
-  console.log(`slicer-proxy listening on http://${host}:${port}`);
-});
+// Only bind a port when this file is the process entry point. When it is merely
+// imported (single-container embed) nothing listens.
+if (isMainModule()) {
+  const server = createServer(handleSlicerProxyRequest);
+  server.listen(port, host, () => {
+    console.log(`slicer-proxy listening on http://${host}:${port}`);
+  });
+}
+
+function isMainModule() {
+  const entry = process.argv[1];
+  if (!entry) return false;
+  try {
+    return import.meta.url === pathToFileURL(entry).href;
+  } catch {
+    return false;
+  }
+}

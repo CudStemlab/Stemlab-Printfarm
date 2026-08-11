@@ -1533,6 +1533,11 @@ Prometheus exposition of the web tier's own request metrics
 over the compose network. Carries no secrets. Distinct from the `exporter`
 service, which exposes the print-farm *data* metrics (`printfarm_*`) from Postgres.
 
+In the **single-container** build there is no nginx to 404 it and the web
+listener *is* the public port, so setting `METRICS_LISTEN_PORT` (default `9181`
+there) moves this endpoint onto its own listener — `/metrics` on the public port
+then returns `404` like any other unknown path.
+
 Every response (on all endpoints) carries an `X-Request-Id` header, echoed in the
 server's access log line (`reqId`) for correlation; a client may supply its own
 via the `X-Request-Id` request header.

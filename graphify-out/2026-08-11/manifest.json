@@ -345,8 +345,8 @@
     "semantic_hash": "27cf1e3591e961fcb8ee9033cd85bab4"
   },
   "server/app.js": {
-    "mtime": 1786466644.6746926,
-    "ast_hash": "59290772acf59eb920fe1bada3a2739a",
+    "mtime": 1786269752.5506113,
+    "ast_hash": "0beb9ce141ebce019efec1b3ac9219d4",
     "semantic_hash": ""
   },
   "server/bambuCamera.js": {
@@ -370,8 +370,8 @@
     "semantic_hash": "fe8441176f9a026d2711d5ee86b8a63d"
   },
   "server/postgres.js": {
-    "mtime": 1786270544.7505336,
-    "ast_hash": "5b9138fdcd641b879a751863f4e74256",
+    "mtime": 1786270018.8772843,
+    "ast_hash": "bf97130699befe66f0791715fdaa8866",
     "semantic_hash": ""
   },
   "server/redis.js": {
@@ -395,8 +395,8 @@
     "semantic_hash": "c25e1b4913ad90d86caf72591783f425"
   },
   "slicer-proxy/index.js": {
-    "mtime": 1786466412.020041,
-    "ast_hash": "6ac31441ab2745474dcae4f63be2aac6",
+    "mtime": 1784216551.2902331,
+    "ast_hash": "f51104faff54e6c96d1046145c137e37",
     "semantic_hash": ""
   },
   "slicer-proxy/octoprintDevice.js": {
@@ -970,18 +970,18 @@
     "semantic_hash": ""
   },
   "API.md": {
-    "mtime": 1786466706.3384082,
-    "ast_hash": "cbbc82609df7d08dab27ef54e94c8361",
+    "mtime": 1786269928.748187,
+    "ast_hash": "cf64769eadcc36021a013d2291d826c7",
     "semantic_hash": ""
   },
   "CLAUDE.md": {
-    "mtime": 1786466724.2076163,
-    "ast_hash": "3d94293e0a03d1a8fd155e8a9fab33a3",
+    "mtime": 1786270061.9464386,
+    "ast_hash": "15a0c579a4f95896e6c9d36cfbde41b4",
     "semantic_hash": ""
   },
   "README.md": {
-    "mtime": 1786466695.0462768,
-    "ast_hash": "976519d3d51fc8fba7be22205c359b98",
+    "mtime": 1784665753.7586,
+    "ast_hash": "0575b6ff127b6e4e387279d31be874a9",
     "semantic_hash": ""
   },
   "SECURITY.md": {
@@ -1005,7 +1005,7 @@
     "semantic_hash": ""
   },
   "docker-compose.yml": {
-    "mtime": 1786270544.7305334,
+    "mtime": 1786269889.4430537,
     "ast_hash": "5d27ed57d7321033b45b8c09c86a4b2f",
     "semantic_hash": ""
   },
@@ -1195,7 +1195,7 @@
     "semantic_hash": ""
   },
   "src/app/components/BackupSettings.tsx": {
-    "mtime": 1786270544.7505336,
+    "mtime": 1786269874.5574448,
     "ast_hash": "66b0437f482f5d5977c71d38ef53c746",
     "semantic_hash": ""
   },
@@ -1340,8 +1340,8 @@
     "semantic_hash": ""
   },
   "mcp/index.js": {
-    "mtime": 1786466398.0848851,
-    "ast_hash": "74815b74b56ce230b0278f90711fe69f",
+    "mtime": 1784665753.7646,
+    "ast_hash": "3ba22e71085a2316f92b3524d5afd930",
     "semantic_hash": ""
   },
   "mcp/server.js": {
@@ -1585,38 +1585,23 @@
     "semantic_hash": ""
   },
   "server/backupArchive.js": {
-    "mtime": 1786270544.7495337,
-    "ast_hash": "804daced37f0a4e472989b9f6e314d3c",
+    "mtime": 1786269951.302295,
+    "ast_hash": "62a0350746fee7e07fb7836d1016a94a",
     "semantic_hash": ""
   },
   "server/backupArchive.test.mjs": {
-    "mtime": 1786270544.7495337,
-    "ast_hash": "fbc0ebaa51369685c9530fab30be83a0",
+    "mtime": 1786269846.6746025,
+    "ast_hash": "1ce093f607190bf79afd28c3fd66fd72",
     "semantic_hash": ""
   },
   "server/zipStream.js": {
-    "mtime": 1786270544.7505336,
+    "mtime": 1786269457.29826,
     "ast_hash": "23ca4da00fdc1e517ccb1ce33334f93b",
     "semantic_hash": ""
   },
   "server/zipStream.test.mjs": {
-    "mtime": 1786270544.7505336,
+    "mtime": 1786269801.2590063,
     "ast_hash": "8be0b5f55ecfd659a4071ebab507c87d",
-    "semantic_hash": ""
-  },
-  "docker/single/entrypoint.sh": {
-    "mtime": 1786466555.5126665,
-    "ast_hash": "6a55248b3e45a2162f6e693c02627314",
-    "semantic_hash": ""
-  },
-  "mcp/httpHandler.js": {
-    "mtime": 1786466385.4927447,
-    "ast_hash": "9e8c3f56b93236278c4f0efda0c5e036",
-    "semantic_hash": ""
-  },
-  "docker-compose.single.yml": {
-    "mtime": 1786466653.2097914,
-    "ast_hash": "e1dee4728da548e553a23ae388abae7b",
     "semantic_hash": ""
   }
 }

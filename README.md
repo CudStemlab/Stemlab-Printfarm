@@ -122,6 +122,28 @@ Open **http://localhost:8080**. On first run, visit `/login` to complete one-tim
 
 > **Optional SSO** — admins can enable Google, Microsoft Entra ID / AD FS, and/or SAML 2.0 sign-in under Settings → Sign-in. Anyone who signs in via SSO gets the read-only **student** role. See [API.md](API.md#sso-sign-in-api-apiauth) for redirect URIs.
 
+### Single-container deployment (minimal)
+
+The whole farm also ships as **one container** — same code, different packaging:
+
+```bash
+cp .env.example .env
+docker compose -f docker-compose.single.yml up --build
+```
+
+`Dockerfile.single` bundles PostgreSQL 16, the Node web server (with the **slicer proxy on `/printers/` and the MCP server on `/mcp` mounted in-process**), the Go poller and the Go exporter, supervised by `docker/single/entrypoint.sh`. Every URL stays where it was, so slicers, ESP32 status lights and MCP clients need no reconfiguration. Data lives in the `pgdata` volume; PostgreSQL listens on loopback only and every process — the database included — runs as the unprivileged `printfarm` user.
+
+**What's dropped, and what you give up:**
+
+| Dropped | Consequence |
+|---|---|
+| nginx | Node terminates the public port. CSP/HSTS/CSRF already live in the app, but nginx's **request-rate and connection limits are gone** — put TLS *and* rate limiting on an external reverse proxy (Cloudflare Tunnel, Traefik, host nginx) for an internet-facing deploy. `TRUST_PROXY_HEADERS` defaults to `false` here so client-supplied `X-Forwarded-For` can't forge audit IPs; set it `true` once a trusted proxy overwrites those headers. |
+| Redis | Optional acceleration only — sessions/rate-limit/telemetry fall back to Postgres/in-memory. Point `REDIS_URL` at an external instance to re-enable. |
+| Prometheus | Scrape the container from an external Prometheus: `:9180` (farm `printfarm_*`) and `:9181` (web `printfarm_web_*`), both published on loopback. Grafana dashboards are unchanged. |
+| Watchtower one-click update | Update with `docker compose -f docker-compose.single.yml up --build -d`. The "update available" *check* still works. |
+
+Horizontal scaling (poller shards, multiple web replicas) needs the multi-container stack; a single container is always shard 0.
+
 ### Production deploy + one-click updates (optional)
 
 An additional `docker-compose.deploy.yml` overlay adds a **Watchtower** sidecar so admins can check for and apply new images from Settings → Maintenance without shelling into the host:
