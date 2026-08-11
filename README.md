@@ -132,7 +132,7 @@ The default `docker-compose.yml` builds `Dockerfile.single`: **one container** h
 | nginx | Node terminates the public port. CSP/HSTS/CSRF already live in the app, but nginx's **request-rate and connection limits are gone** — put TLS *and* rate limiting on an external reverse proxy (Cloudflare Tunnel, Traefik, host nginx) for an internet-facing deploy. `TRUST_PROXY_HEADERS` defaults to `false` here so client-supplied `X-Forwarded-For` can't forge audit IPs; set it `true` once a trusted proxy overwrites those headers. |
 | Redis | Optional acceleration only — sessions/rate-limit/telemetry fall back to Postgres/in-memory. Point `REDIS_URL` at an external instance to re-enable. |
 | Prometheus | Scrape the container from an external Prometheus: `:9180` (farm `printfarm_*`) and `:9181` (web `printfarm_web_*`), both published on loopback. Grafana dashboards are unchanged. |
-| Watchtower one-click update | Update with `docker compose up --build -d`. The "update available" *check* still works. |
+| Rolling per-service restarts | An update recreates the one container, so PostgreSQL bounces with it — a short full outage instead of a service-by-service restart. One-click updates still work via `docker-compose.deploy.yml`. |
 | Poller sharding / per-service scaling | A single container is always shard 0. |
 
 ### Multi-container stack (when you need the pieces back)
@@ -145,12 +145,13 @@ docker compose -f docker-compose.multi.yml up --build    # or: make up-multi
 
 Both stacks read the same `.env` and the same database schema, so you can move between them — just not on the same host ports at once.
 
-### Production deploy + one-click updates (multi-container)
+### Production deploy + one-click updates
 
-An additional `docker-compose.deploy.yml` overlay adds a **Watchtower** sidecar so admins can check for and apply new images from Settings → Maintenance without shelling into the host:
+`docker-compose.deploy.yml` overlays the default stack: it runs the **published image** instead of building from source, and adds a **Watchtower** sidecar so admins can apply new versions from Settings → Maintenance without shelling into the host:
 
 ```bash
-docker compose -f docker-compose.multi.yml -f docker-compose.deploy.yml up --build -d
+docker compose -f docker-compose.yml -f docker-compose.deploy.yml pull
+docker compose -f docker-compose.yml -f docker-compose.deploy.yml up -d
 ```
 
 Configure in `.env`: `IMAGE_PREFIX` (the Docker Hub namespace CI pushed images under), `UPDATE_CHECK_REPO` (`owner/repo`, so the admin update card can diff the running commit against the latest on GitHub), and `WATCHTOWER_TOKEN` (a shared secret — leave empty to hide the one-click apply button and keep update *checking* without allowing *applying*). On a rootless-Docker host, also set `WATCHTOWER_DOCKER_SOCK` to the per-user socket.
@@ -386,7 +387,16 @@ Then import `monitoring/grafana-dashboard.json` (Dashboards → New → Import) 
 
 ## 🏭 Image builds (CI)
 
-This repo is designed to be forked and deployed by anyone — **no secrets or deployment-specific URLs are committed**. Every push to `main` triggers `.github/workflows/deploy.yml`, which builds the custom images and pushes them to Docker Hub.
+This repo is designed to be forked and deployed by anyone — **no secrets or deployment-specific URLs are committed**. Every push to `main` triggers `.github/workflows/deploy.yml`, which builds **one image** from `Dockerfile.single` and pushes it to Docker Hub:
+
+| Tag | Meaning |
+|---|---|
+| `<DOCKERHUB_USERNAME>/printfarm:latest` | Moving tag — what Watchtower pulls |
+| `<DOCKERHUB_USERNAME>/printfarm:sha-<12>` | Immutable per-commit tag — the rollback target |
+
+`.github/workflows/rollback.yml` (the admin "Roll back" button) re-points `latest` at one of those `sha-*` tags registry-side.
+
+> The per-service images (`printfarm-web`, `-nginx`, `-poller`, `-exporter`, `-slicer-proxy`, `-mcp`) are **no longer published**. The multi-container stack builds from source: `docker compose -f docker-compose.multi.yml up --build`.
 
 Configure these under **Settings → Secrets and variables → Actions**:
 

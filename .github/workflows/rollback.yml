@@ -1,8 +1,8 @@
 name: Roll Back Images
 
-# Re-points the moving `:latest` tag of every app image at a previously built
+# Re-points the moving `:latest` tag of the app image at a previously built
 # `:sha-<12>` tag, so the Watchtower sidecar's next pull brings the farm back to
-# that commit.
+# that commit. One image (Dockerfile.single) = one tag to move.
 #
 # WHY THIS LIVES IN CI: Watchtower can only ever re-pull the *same* tag — it has
 # no notion of "go to that other tag" — so a rollback has to move `latest` in the
@@ -57,25 +57,16 @@ jobs:
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
 
-      # Fail fast: confirm ALL six tags exist before moving ANY of them, so a
-      # partially-published commit can't leave the farm on a mixed-version stack
-      # (new web against an old poller, etc.).
-      - name: Verify every rollback target exists
+      # Fail fast: confirm the target tag exists before moving `latest`, so a
+      # failed or never-published build can't leave `latest` pointing at nothing.
+      - name: Verify the rollback target exists
         run: |
-          missing=""
-          for svc in web poller nginx exporter slicer-proxy mcp; do
-            ref="${IMAGE_PREFIX}/printfarm-${svc}:sha-${SHORT_SHA}"
-            if docker buildx imagetools inspect "$ref" >/dev/null 2>&1; then
-              echo "ok      $ref"
-            else
-              echo "MISSING $ref"
-              missing="${missing} ${svc}"
-            fi
-          done
-          if [ -n "$missing" ]; then
-            echo
-            echo "Refusing to roll back: no sha-${SHORT_SHA} image for:${missing}"
-            echo "That commit predates per-commit image tagging, or its build did not finish."
+          ref="${IMAGE_PREFIX}/printfarm:sha-${SHORT_SHA}"
+          if docker buildx imagetools inspect "$ref" >/dev/null 2>&1; then
+            echo "ok $ref"
+          else
+            echo "Refusing to roll back: no image at $ref"
+            echo "That commit predates the single-image build, or its build did not finish."
             exit 1
           fi
 
@@ -85,18 +76,16 @@ jobs:
       # would alter the digest and publish a different image).
       - name: Re-point latest at the rollback target
         run: |
-          for svc in web poller nginx exporter slicer-proxy mcp; do
-            echo "retagging printfarm-${svc}: sha-${SHORT_SHA} -> latest"
-            docker buildx imagetools create \
-              --tag "${IMAGE_PREFIX}/printfarm-${svc}:latest" \
-              "${IMAGE_PREFIX}/printfarm-${svc}:sha-${SHORT_SHA}"
-          done
+          echo "retagging printfarm: sha-${SHORT_SHA} -> latest"
+          docker buildx imagetools create \
+            --tag "${IMAGE_PREFIX}/printfarm:latest" \
+            "${IMAGE_PREFIX}/printfarm:sha-${SHORT_SHA}"
 
       - name: Summary
         run: |
           echo "### Rolled back to \`${SHORT_SHA}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "All six \`:latest\` tags now point at \`sha-${SHORT_SHA}\`." >> "$GITHUB_STEP_SUMMARY"
+          echo "\`${IMAGE_PREFIX}/printfarm:latest\` now points at \`sha-${SHORT_SHA}\`." >> "$GITHUB_STEP_SUMMARY"
           echo "The farm updates when Watchtower next pulls (the admin card triggers this automatically)." >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "> **Note:** database migrations are forward-only and are _not_ reverted by a rollback." >> "$GITHUB_STEP_SUMMARY"
