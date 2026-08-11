@@ -31,10 +31,10 @@ up-web:
 	APP_VERSION=$$(git rev-parse HEAD) docker compose -f docker-compose.multi.yml up -d --build web
 	docker compose -f docker-compose.multi.yml restart nginx
 
-# Pull + run the CI-published images (full one-click "Update now" flow via
-# Watchtower). Multi-container only — requires IMAGE_PREFIX + WATCHTOWER_TOKEN
-# in .env.
-.PHONY: up-deploy
-up-deploy:
-	docker compose -f docker-compose.multi.yml -f docker-compose.deploy.yml pull
-	docker compose -f docker-compose.multi.yml -f docker-compose.deploy.yml up -d
+# Deployed host: pull + run the CI-published image instead of building from
+# source. Deploys are manual — nothing on the host watches the registry, so this
+# is the update. Requires IMAGE_PREFIX in .env; leave WATCHTOWER_TOKEN empty.
+.PHONY: deploy-pull
+deploy-pull:
+	docker compose -f docker-compose.yml -f docker-compose.deploy.yml pull
+	docker compose -f docker-compose.yml -f docker-compose.deploy.yml up -d

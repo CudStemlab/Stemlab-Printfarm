@@ -4871,7 +4871,7 @@
       "source_location": "L28",
       "_origin": "ast",
       "id": "go_services_cmd_web_authroutes_readjsonbody",
-      "community": 40,
+      "community": 16,
       "norm_label": "readjsonbody()"
     },
     {
@@ -5161,7 +5161,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "go_services_cmd_web_branding",
-      "community": 37,
+      "community": 40,
       "norm_label": "branding.go"
     },
     {
@@ -5171,7 +5171,7 @@
       "source_location": "L60",
       "_origin": "ast",
       "id": "go_services_cmd_web_branding_decodesvgdataurl",
-      "community": 37,
+      "community": 40,
       "norm_label": "decodesvgdataurl()"
     },
     {
@@ -5181,7 +5181,7 @@
       "source_location": "L74",
       "_origin": "ast",
       "id": "go_services_cmd_web_branding_sanitizesvg",
-      "community": 37,
+      "community": 40,
       "norm_label": "sanitizesvg()"
     },
     {
@@ -5191,7 +5191,7 @@
       "source_location": "L85",
       "_origin": "ast",
       "id": "go_services_cmd_web_branding_replacefirst",
-      "community": 37,
+      "community": 40,
       "norm_label": "replacefirst()"
     },
     {
@@ -5201,7 +5201,7 @@
       "source_location": "",
       "_origin": "ast",
       "id": "regexp",
-      "community": 37,
+      "community": 40,
       "norm_label": "regexp"
     },
     {
@@ -5211,7 +5211,7 @@
       "source_location": "L93",
       "_origin": "ast",
       "id": "go_services_cmd_web_branding_firstgroup",
-      "community": 37,
+      "community": 40,
       "norm_label": "firstgroup()"
     },
     {
@@ -5221,7 +5221,7 @@
       "source_location": "L104",
       "_origin": "ast",
       "id": "go_services_cmd_web_branding_normalizesvgsize",
-      "community": 37,
+      "community": 40,
       "norm_label": "normalizesvgsize()"
     },
     {
@@ -5231,7 +5231,7 @@
       "source_location": "L122",
       "_origin": "ast",
       "id": "web_svgthemeresult",
-      "community": 37,
+      "community": 40,
       "norm_label": "svgthemeresult"
     },
     {
@@ -5241,7 +5241,7 @@
       "source_location": "L130",
       "_origin": "ast",
       "id": "go_services_cmd_web_branding_analyzesvgfortheme",
-      "community": 37,
+      "community": 40,
       "norm_label": "analyzesvgfortheme()"
     },
     {
@@ -5251,7 +5251,7 @@
       "source_location": "L167",
       "_origin": "ast",
       "id": "go_services_cmd_web_branding_uniqueinorder",
-      "community": 37,
+      "community": 40,
       "norm_label": "uniqueinorder()"
     },
     {
@@ -5261,7 +5261,7 @@
       "source_location": "L181",
       "_origin": "ast",
       "id": "go_services_cmd_web_branding_handlebrandingput",
-      "community": 37,
+      "community": 40,
       "norm_label": "handlebrandingput()"
     },
     {
@@ -5271,7 +5271,7 @@
       "source_location": "",
       "_origin": "ast",
       "id": "go_services_cmd_web_branding_go_context",
-      "community": 37,
+      "community": 40,
       "norm_label": "context"
     },
     {
@@ -5281,7 +5281,7 @@
       "source_location": "",
       "_origin": "ast",
       "id": "go_services_cmd_web_branding_go_responsewriter",
-      "community": 37,
+      "community": 40,
       "norm_label": "responsewriter"
     },
     {
@@ -5291,7 +5291,7 @@
       "source_location": "",
       "_origin": "ast",
       "id": "go_services_cmd_web_branding_go_request",
-      "community": 37,
+      "community": 40,
       "norm_label": "request"
     },
     {
@@ -5301,7 +5301,7 @@
       "source_location": "L289",
       "_origin": "ast",
       "id": "go_services_cmd_web_branding_brandingscaleinput",
-      "community": 37,
+      "community": 40,
       "norm_label": "brandingscaleinput()"
     },
     {
@@ -5311,7 +5311,7 @@
       "source_location": "L298",
       "_origin": "ast",
       "id": "go_services_cmd_web_branding_caprunes",
-      "community": 37,
+      "community": 40,
       "norm_label": "caprunes()"
     },
     {
@@ -5321,7 +5321,7 @@
       "source_location": "L308",
       "_origin": "ast",
       "id": "go_services_cmd_web_branding_handlefaviconget",
-      "community": 37,
+      "community": 40,
       "norm_label": "handlefaviconget()"
     },
     {
@@ -7721,7 +7721,7 @@
       "source_location": "L384",
       "_origin": "ast",
       "id": "go_services_cmd_web_mutations_decodebodymap",
-      "community": 40,
+      "community": 21,
       "norm_label": "decodebodymap()"
     },
     {
@@ -7761,7 +7761,7 @@
       "source_location": "L418",
       "_origin": "ast",
       "id": "go_services_cmd_web_mutations_internalerror",
-      "community": 21,
+      "community": 40,
       "norm_label": "internalerror()"
     },
     {
@@ -8511,7 +8511,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "go_services_cmd_web_redis",
-      "community": 64,
+      "community": 23,
       "norm_label": "redis.go"
     },
     {
@@ -8541,7 +8541,7 @@
       "source_location": "L37",
       "_origin": "ast",
       "id": "go_services_cmd_web_redis_redisping",
-      "community": 64,
+      "community": 23,
       "norm_label": "redisping()"
     },
     {
@@ -8551,7 +8551,7 @@
       "source_location": "",
       "_origin": "ast",
       "id": "go_services_cmd_web_redis_go_context",
-      "community": 64,
+      "community": 23,
       "norm_label": "context"
     },
     {
@@ -8561,7 +8561,7 @@
       "source_location": "L57",
       "_origin": "ast",
       "id": "go_services_cmd_web_redis_redischeckloginrate",
-      "community": 64,
+      "community": 23,
       "norm_label": "redischeckloginrate()"
     },
     {
@@ -8571,7 +8571,7 @@
       "source_location": "",
       "_origin": "ast",
       "id": "go_services_cmd_web_redis_go_duration",
-      "community": 64,
+      "community": 23,
       "norm_label": "duration"
     },
     {
@@ -8581,7 +8581,7 @@
       "source_location": "L82",
       "_origin": "ast",
       "id": "go_services_cmd_web_redis_redisrecordloginfailure",
-      "community": 64,
+      "community": 23,
       "norm_label": "redisrecordloginfailure()"
     },
     {
@@ -8591,7 +8591,7 @@
       "source_location": "L95",
       "_origin": "ast",
       "id": "go_services_cmd_web_redis_redisclearloginattempts",
-      "community": 64,
+      "community": 23,
       "norm_label": "redisclearloginattempts()"
     },
     {
@@ -8601,7 +8601,7 @@
       "source_location": "L128",
       "_origin": "ast",
       "id": "go_services_cmd_web_redis_init",
-      "community": 64,
+      "community": 23,
       "norm_label": "init()"
     },
     {
@@ -8611,7 +8611,7 @@
       "source_location": "L130",
       "_origin": "ast",
       "id": "go_services_cmd_web_redis_bambutlsconfig",
-      "community": 64,
+      "community": 23,
       "norm_label": "bambutlsconfig()"
     },
     {
@@ -8621,7 +8621,7 @@
       "source_location": "",
       "_origin": "ast",
       "id": "go_services_cmd_web_redis_go_config",
-      "community": 64,
+      "community": 23,
       "norm_label": "config"
     },
     {
@@ -8631,7 +8631,7 @@
       "source_location": "L137",
       "_origin": "ast",
       "id": "go_services_cmd_web_redis_samlprobetransport",
-      "community": 64,
+      "community": 23,
       "norm_label": "samlprobetransport()"
     },
     {
@@ -8641,7 +8641,7 @@
       "source_location": "",
       "_origin": "ast",
       "id": "roundtripper",
-      "community": 64,
+      "community": 23,
       "norm_label": "roundtripper"
     },
     {
@@ -8651,7 +8651,7 @@
       "source_location": "L141",
       "_origin": "ast",
       "id": "web_ssrfsafetransport",
-      "community": 64,
+      "community": 23,
       "norm_label": "ssrfsafetransport"
     },
     {
@@ -8661,7 +8661,7 @@
       "source_location": "L143",
       "_origin": "ast",
       "id": "web_ssrfsafetransport_roundtrip",
-      "community": 64,
+      "community": 23,
       "norm_label": ".roundtrip()"
     },
     {
@@ -8671,7 +8671,7 @@
       "source_location": "",
       "_origin": "ast",
       "id": "go_services_cmd_web_redis_go_request",
-      "community": 64,
+      "community": 23,
       "norm_label": "request"
     },
     {
@@ -8681,7 +8681,7 @@
       "source_location": "",
       "_origin": "ast",
       "id": "go_services_cmd_web_redis_go_response",
-      "community": 64,
+      "community": 23,
       "norm_label": "response"
     },
     {
@@ -8691,7 +8691,7 @@
       "source_location": "L150",
       "_origin": "ast",
       "id": "web_ssrfblockederror",
-      "community": 64,
+      "community": 23,
       "norm_label": "ssrfblockederror"
     },
     {
@@ -8701,7 +8701,7 @@
       "source_location": "L152",
       "_origin": "ast",
       "id": "web_ssrfblockederror_error",
-      "community": 64,
+      "community": 23,
       "norm_label": ".error()"
     },
     {
@@ -9541,7 +9541,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "go_services_cmd_web_ssrf",
-      "community": 64,
+      "community": 23,
       "norm_label": "ssrf.go"
     },
     {
@@ -9551,7 +9551,7 @@
       "source_location": "L10",
       "_origin": "ast",
       "id": "go_services_cmd_web_ssrf_isprivatehost",
-      "community": 64,
+      "community": 23,
       "norm_label": "isprivatehost()"
     },
     {
@@ -9561,7 +9561,7 @@
       "source_location": "L29",
       "_origin": "ast",
       "id": "go_services_cmd_web_ssrf_isprivateip",
-      "community": 64,
+      "community": 23,
       "norm_label": "isprivateip()"
     },
     {
@@ -9571,7 +9571,7 @@
       "source_location": "",
       "_origin": "ast",
       "id": "ip",
-      "community": 64,
+      "community": 23,
       "norm_label": "ip"
     },
     {
@@ -9581,7 +9581,7 @@
       "source_location": "L43",
       "_origin": "ast",
       "id": "go_services_cmd_web_ssrf_init",
-      "community": 64,
+      "community": 23,
       "norm_label": "init()"
     },
     {
@@ -10633,7 +10633,7 @@
       "source_location": "L66",
       "_origin": "ast",
       "id": "metrics_writer_string",
-      "community": 35,
+      "community": 40,
       "norm_label": ".string()"
     },
     {
@@ -13543,7 +13543,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "poller_printer_status_poller",
-      "community": 60,
+      "community": 25,
       "norm_label": "printer_status_poller.py"
     },
     {
@@ -13553,7 +13553,7 @@
       "source_location": "L272",
       "_origin": "ast",
       "id": "poller_printer_status_poller_printerofflineerror",
-      "community": 60,
+      "community": 41,
       "norm_label": "printerofflineerror"
     },
     {
@@ -13563,7 +13563,7 @@
       "source_location": "",
       "_origin": "ast",
       "id": "exception",
-      "community": 60,
+      "community": 41,
       "norm_label": "exception"
     },
     {
@@ -13593,7 +13593,7 @@
       "source_location": "",
       "_origin": "ast",
       "id": "connection",
-      "community": 25,
+      "community": 64,
       "norm_label": "connection"
     },
     {
@@ -13623,7 +13623,7 @@
       "source_location": "L315",
       "_origin": "ast",
       "id": "poller_printer_status_poller_upsert_poller_health",
-      "community": 25,
+      "community": 64,
       "norm_label": "upsert_poller_health()"
     },
     {
@@ -13633,7 +13633,7 @@
       "source_location": "L362",
       "_origin": "ast",
       "id": "poller_printer_status_poller_load_secret_key",
-      "community": 60,
+      "community": 25,
       "norm_label": "_load_secret_key()"
     },
     {
@@ -13643,7 +13643,7 @@
       "source_location": "L380",
       "_origin": "ast",
       "id": "poller_printer_status_poller_encrypt_secret",
-      "community": 41,
+      "community": 25,
       "norm_label": "encrypt_secret()"
     },
     {
@@ -13683,7 +13683,7 @@
       "source_location": "L457",
       "_origin": "ast",
       "id": "poller_printer_status_poller_upsert_printer",
-      "community": 41,
+      "community": 25,
       "norm_label": "upsert_printer()"
     },
     {
@@ -13693,7 +13693,7 @@
       "source_location": "L582",
       "_origin": "ast",
       "id": "poller_printer_status_poller_list_discord_webhooks",
-      "community": 25,
+      "community": 64,
       "norm_label": "list_discord_webhooks()"
     },
     {
@@ -13703,7 +13703,7 @@
       "source_location": "L600",
       "_origin": "ast",
       "id": "poller_printer_status_poller_list_slicer_estimates",
-      "community": 25,
+      "community": 64,
       "norm_label": "list_slicer_estimates()"
     },
     {
@@ -13713,7 +13713,7 @@
       "source_location": "L609",
       "_origin": "ast",
       "id": "poller_printer_status_poller_record_slicer_estimate",
-      "community": 109,
+      "community": 64,
       "norm_label": "record_slicer_estimate()"
     },
     {
@@ -13743,7 +13743,7 @@
       "source_location": "L663",
       "_origin": "ast",
       "id": "poller_printer_status_poller_map_print_state_to_status",
-      "community": 60,
+      "community": 25,
       "norm_label": "map_print_state_to_status()"
     },
     {
@@ -13933,7 +13933,7 @@
       "source_location": "L1049",
       "_origin": "ast",
       "id": "poller_printer_status_poller_map_bambu_state",
-      "community": 60,
+      "community": 41,
       "norm_label": "map_bambu_state()"
     },
     {
@@ -13953,7 +13953,7 @@
       "source_location": "L1104",
       "_origin": "ast",
       "id": "poller_printer_status_poller_build_bambu_spools",
-      "community": 60,
+      "community": 41,
       "norm_label": "build_bambu_spools()"
     },
     {
@@ -13963,7 +13963,7 @@
       "source_location": "L1161",
       "_origin": "ast",
       "id": "poller_printer_status_poller_bambu_active_spool_id",
-      "community": 60,
+      "community": 41,
       "norm_label": "bambu_active_spool_id()"
     },
     {
@@ -13983,7 +13983,7 @@
       "source_location": "L1208",
       "_origin": "ast",
       "id": "poller_printer_status_poller_is_bambu_runout_code",
-      "community": 60,
+      "community": 68,
       "norm_label": "_is_bambu_runout_code()"
     },
     {
@@ -14003,7 +14003,7 @@
       "source_location": "L1237",
       "_origin": "ast",
       "id": "poller_printer_status_poller_bambu_filament_runout",
-      "community": 60,
+      "community": 68,
       "norm_label": "bambu_filament_runout()"
     },
     {
@@ -14023,7 +14023,7 @@
       "source_location": "L1339",
       "_origin": "ast",
       "id": "poller_printer_status_poller_load_bambu_hms_table",
-      "community": 60,
+      "community": 25,
       "norm_label": "_load_bambu_hms_table()"
     },
     {
@@ -14093,7 +14093,7 @@
       "source_location": "L1548",
       "_origin": "ast",
       "id": "poller_printer_status_poller_parse_3mf_filament_grams",
-      "community": 109,
+      "community": 64,
       "norm_label": "parse_3mf_filament_grams()"
     },
     {
@@ -14153,7 +14153,7 @@
       "source_location": "L1687",
       "_origin": "ast",
       "id": "poller_printer_status_poller_ensure_bambu_slicer_estimate",
-      "community": 109,
+      "community": 64,
       "norm_label": "ensure_bambu_slicer_estimate()"
     },
     {
@@ -14173,7 +14173,7 @@
       "source_location": "L1773",
       "_origin": "ast",
       "id": "poller_printer_status_poller_build_bambu_fan_speeds",
-      "community": 60,
+      "community": 41,
       "norm_label": "build_bambu_fan_speeds()"
     },
     {
@@ -14183,7 +14183,7 @@
       "source_location": "L1793",
       "_origin": "ast",
       "id": "poller_printer_status_poller_decode_chamber_value",
-      "community": 60,
+      "community": 41,
       "norm_label": "_decode_chamber_value()"
     },
     {
@@ -14193,7 +14193,7 @@
       "source_location": "L1807",
       "_origin": "ast",
       "id": "poller_printer_status_poller_chamber_temp_candidates",
-      "community": 60,
+      "community": 41,
       "norm_label": "_chamber_temp_candidates()"
     },
     {
@@ -14203,7 +14203,7 @@
       "source_location": "L1818",
       "_origin": "ast",
       "id": "poller_printer_status_poller_decode_bambu_chamber_temp",
-      "community": 60,
+      "community": 41,
       "norm_label": "decode_bambu_chamber_temp()"
     },
     {
@@ -14213,7 +14213,7 @@
       "source_location": "L1828",
       "_origin": "ast",
       "id": "poller_printer_status_poller_decode_bambu_chamber_target",
-      "community": 60,
+      "community": 41,
       "norm_label": "decode_bambu_chamber_target()"
     },
     {
@@ -14223,7 +14223,7 @@
       "source_location": "L1849",
       "_origin": "ast",
       "id": "poller_printer_status_poller_decode_nozzle_value",
-      "community": 60,
+      "community": 41,
       "norm_label": "_decode_nozzle_value()"
     },
     {
@@ -14233,7 +14233,7 @@
       "source_location": "L1871",
       "_origin": "ast",
       "id": "poller_printer_status_poller_build_bambu_dual_nozzles",
-      "community": 60,
+      "community": 41,
       "norm_label": "build_bambu_dual_nozzles()"
     },
     {
@@ -14243,7 +14243,7 @@
       "source_location": "L1917",
       "_origin": "ast",
       "id": "poller_printer_status_poller_fetch_bambu_status",
-      "community": 60,
+      "community": 41,
       "norm_label": "fetch_bambu_status()"
     },
     {
@@ -14263,7 +14263,7 @@
       "source_location": "L2062",
       "_origin": "ast",
       "id": "poller_printer_status_poller_accrue_print_hours_and_trigger_maintenance",
-      "community": 25,
+      "community": 64,
       "norm_label": "accrue_print_hours_and_trigger_maintenance()"
     },
     {
@@ -14273,7 +14273,7 @@
       "source_location": "L2125",
       "_origin": "ast",
       "id": "poller_printer_status_poller_finalize_job_analytics",
-      "community": 25,
+      "community": 64,
       "norm_label": "finalize_job_analytics()"
     },
     {
@@ -14303,7 +14303,7 @@
       "source_location": "L2202",
       "_origin": "ast",
       "id": "poller_printer_status_poller_grab_mjpeg_frame",
-      "community": 41,
+      "community": 25,
       "norm_label": "grab_mjpeg_frame()"
     },
     {
@@ -14333,7 +14333,7 @@
       "source_location": "L2271",
       "_origin": "ast",
       "id": "poller_printer_status_poller_webhook_wants",
-      "community": 199,
+      "community": 122,
       "norm_label": "webhook_wants()"
     },
     {
@@ -14343,7 +14343,7 @@
       "source_location": "L2283",
       "_origin": "ast",
       "id": "poller_printer_status_poller_tts_content_for_embed",
-      "community": 199,
+      "community": 122,
       "norm_label": "tts_content_for_embed()"
     },
     {
@@ -14353,7 +14353,7 @@
       "source_location": "L2293",
       "_origin": "ast",
       "id": "poller_printer_status_poller_send_discord_embed",
-      "community": 199,
+      "community": 122,
       "norm_label": "send_discord_embed()"
     },
     {
@@ -14383,7 +14383,7 @@
       "source_location": "L2505",
       "_origin": "ast",
       "id": "poller_printer_status_poller_collect_analytics_for_transition",
-      "community": 25,
+      "community": 64,
       "norm_label": "collect_analytics_for_transition()"
     },
     {
@@ -14393,7 +14393,7 @@
       "source_location": "L2549",
       "_origin": "ast",
       "id": "poller_printer_status_poller_spool_ids",
-      "community": 122,
+      "community": 25,
       "norm_label": "spool_ids()"
     },
     {
@@ -14403,7 +14403,7 @@
       "source_location": "L2557",
       "_origin": "ast",
       "id": "poller_printer_status_poller_check_filament_runout",
-      "community": 122,
+      "community": 25,
       "norm_label": "check_filament_runout()"
     },
     {
@@ -14553,7 +14553,7 @@
       "source_location": "L273",
       "_origin": "ast",
       "id": "poller_printer_status_poller_rationale_273",
-      "community": 60,
+      "community": 41,
       "norm_label": "raised when a printer is unreachable for an expected reason (no mqtt report,"
     },
     {
@@ -14583,7 +14583,7 @@
       "source_location": "L323",
       "_origin": "ast",
       "id": "poller_printer_status_poller_rationale_323",
-      "community": 25,
+      "community": 64,
       "norm_label": "record this shard's last-cycle health so the exporter can surface poller     liv"
     },
     {
@@ -14593,7 +14593,7 @@
       "source_location": "L601",
       "_origin": "ast",
       "id": "poller_printer_status_poller_rationale_601",
-      "community": 25,
+      "community": 64,
       "norm_label": "slicer-derived filament totals keyed by (printer_id, job_name)."
     },
     {
@@ -14603,7 +14603,7 @@
       "source_location": "L612",
       "_origin": "ast",
       "id": "poller_printer_status_poller_rationale_612",
-      "community": 109,
+      "community": 64,
       "norm_label": "upsert a slicer-derived filament total (grams) for one print.      same table/ke"
     },
     {
@@ -14643,7 +14643,7 @@
       "source_location": "L1162",
       "_origin": "ast",
       "id": "poller_printer_status_poller_rationale_1162",
-      "community": 60,
+      "community": 41,
       "norm_label": "slot id (matching build_bambu_spools ids) of the tray currently feeding the"
     },
     {
@@ -14673,7 +14673,7 @@
       "source_location": "L1238",
       "_origin": "ast",
       "id": "poller_printer_status_poller_rationale_1238",
-      "community": 60,
+      "community": 68,
       "norm_label": "true when the bambu report carries an active filament-run-out fault."
     },
     {
@@ -14743,7 +14743,7 @@
       "source_location": "L1549",
       "_origin": "ast",
       "id": "poller_printer_status_poller_rationale_1549",
-      "community": 109,
+      "community": 64,
       "norm_label": "sum the plate-level filament weight (grams) from a 3mf's slice_info.config."
     },
     {
@@ -14783,7 +14783,7 @@
       "source_location": "L1694",
       "_origin": "ast",
       "id": "poller_printer_status_poller_rationale_1694",
-      "community": 109,
+      "community": 64,
       "norm_label": "fetch + store the slicer 3mf estimate for an active bambu print if missing."
     },
     {
@@ -14803,7 +14803,7 @@
       "source_location": "L2065",
       "_origin": "ast",
       "id": "poller_printer_status_poller_rationale_2065",
-      "community": 25,
+      "community": 64,
       "norm_label": "add this job's duration to the printer's lifetime + nozzle hour counters,     th"
     },
     {
@@ -14813,7 +14813,7 @@
       "source_location": "L2203",
       "_origin": "ast",
       "id": "poller_printer_status_poller_rationale_2203",
-      "community": 41,
+      "community": 25,
       "norm_label": "pull the first complete jpeg frame out of a multipart/x-mixed-replace mjpeg"
     },
     {
@@ -14833,7 +14833,7 @@
       "source_location": "L2272",
       "_origin": "ast",
       "id": "poller_printer_status_poller_rationale_2272",
-      "community": 199,
+      "community": 122,
       "norm_label": "a webhook with events == none receives every event (historical default);     a l"
     },
     {
@@ -14843,7 +14843,7 @@
       "source_location": "L2284",
       "_origin": "ast",
       "id": "poller_printer_status_poller_rationale_2284",
-      "community": 199,
+      "community": 122,
       "norm_label": "discord only speaks the message `content` aloud (embeds are never read by     tt"
     },
     {
@@ -14853,7 +14853,7 @@
       "source_location": "L2558",
       "_origin": "ast",
       "id": "poller_printer_status_poller_rationale_2558",
-      "community": 122,
+      "community": 25,
       "norm_label": "fire once when filament runs out, from either signal:      - bambu: the hms/prin"
     },
     {
@@ -16093,7 +16093,7 @@
       "source_location": "L1462",
       "_origin": "ast",
       "id": "server_app_getclientip",
-      "community": 17,
+      "community": 2,
       "norm_label": "getclientip()"
     },
     {
@@ -16513,7 +16513,7 @@
       "source_location": "L1999",
       "_origin": "ast",
       "id": "server_app_guardpublicintake",
-      "community": 17,
+      "community": 24,
       "norm_label": "guardpublicintake()"
     },
     {
@@ -16953,7 +16953,7 @@
       "source_location": "L2920",
       "_origin": "ast",
       "id": "server_app_buildstatuslightdeviceroster",
-      "community": 101,
+      "community": 17,
       "norm_label": "buildstatuslightdeviceroster()"
     },
     {
@@ -17343,7 +17343,7 @@
       "source_location": "L6790",
       "_origin": "ast",
       "id": "server_app_createandbroadcastmaintenancenotification",
-      "community": 3,
+      "community": 110,
       "norm_label": "createandbroadcastmaintenancenotification()"
     },
     {
@@ -18023,7 +18023,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "server_eventstream",
-      "community": 93,
+      "community": 110,
       "norm_label": "eventstream.js"
     },
     {
@@ -18033,7 +18033,7 @@
       "source_location": "L14",
       "_origin": "ast",
       "id": "server_eventstream_subscribers",
-      "community": 93,
+      "community": 110,
       "norm_label": "subscribers"
     },
     {
@@ -18043,7 +18043,7 @@
       "source_location": "L16",
       "_origin": "ast",
       "id": "server_eventstream_writeevent",
-      "community": 93,
+      "community": 110,
       "norm_label": "writeevent()"
     },
     {
@@ -18053,7 +18053,7 @@
       "source_location": "L24",
       "_origin": "ast",
       "id": "server_eventstream_addeventsubscriber",
-      "community": 93,
+      "community": 110,
       "norm_label": "addeventsubscriber()"
     },
     {
@@ -18063,7 +18063,7 @@
       "source_location": "L46",
       "_origin": "ast",
       "id": "server_eventstream_broadcastqueueadded",
-      "community": 93,
+      "community": 110,
       "norm_label": "broadcastqueueadded()"
     },
     {
@@ -18073,7 +18073,7 @@
       "source_location": "L55",
       "_origin": "ast",
       "id": "server_eventstream_broadcastmaintenancenotification",
-      "community": 93,
+      "community": 110,
       "norm_label": "broadcastmaintenancenotification()"
     },
     {
@@ -18083,7 +18083,7 @@
       "source_location": "L67",
       "_origin": "ast",
       "id": "server_eventstream_broadcastqueuestatus",
-      "community": 93,
+      "community": 110,
       "norm_label": "broadcastqueuestatus()"
     },
     {
@@ -18093,7 +18093,7 @@
       "source_location": "L77",
       "_origin": "ast",
       "id": "server_eventstream_broadcastmaintenancestatus",
-      "community": 93,
+      "community": 110,
       "norm_label": "broadcastmaintenancestatus()"
     },
     {
@@ -18573,7 +18573,7 @@
       "source_location": "L12",
       "_origin": "ast",
       "id": "server_postgres_decryptprintersecrets",
-      "community": 101,
+      "community": 3,
       "norm_label": "decryptprintersecrets()"
     },
     {
@@ -18633,7 +18633,7 @@
       "source_location": "L630",
       "_origin": "ast",
       "id": "server_postgres_ispublicviewermode",
-      "community": 101,
+      "community": 3,
       "norm_label": "ispublicviewermode()"
     },
     {
@@ -18653,7 +18653,7 @@
       "source_location": "L641",
       "_origin": "ast",
       "id": "server_postgres_buildprinterlistselect",
-      "community": 101,
+      "community": 3,
       "norm_label": "buildprinterlistselect()"
     },
     {
@@ -18673,7 +18673,7 @@
       "source_location": "L700",
       "_origin": "ast",
       "id": "server_postgres_listprinters",
-      "community": 101,
+      "community": 3,
       "norm_label": "listprinters()"
     },
     {
@@ -18683,7 +18683,7 @@
       "source_location": "L727",
       "_origin": "ast",
       "id": "server_postgres_listprintersredacted",
-      "community": 101,
+      "community": 17,
       "norm_label": "listprintersredacted()"
     },
     {
@@ -18693,7 +18693,7 @@
       "source_location": "L745",
       "_origin": "ast",
       "id": "server_postgres_getredactedprinterbyid",
-      "community": 101,
+      "community": 3,
       "norm_label": "getredactedprinterbyid()"
     },
     {
@@ -18723,7 +18723,7 @@
       "source_location": "L828",
       "_origin": "ast",
       "id": "server_postgres_getpublicprinterbyid",
-      "community": 101,
+      "community": 3,
       "norm_label": "getpublicprinterbyid()"
     },
     {
@@ -18763,7 +18763,7 @@
       "source_location": "L994",
       "_origin": "ast",
       "id": "server_postgres_encryptplaintextprintersecrets",
-      "community": 110,
+      "community": 3,
       "norm_label": "encryptplaintextprintersecrets()"
     },
     {
@@ -18923,7 +18923,7 @@
       "source_location": "L1373",
       "_origin": "ast",
       "id": "server_postgres_listqueuejobsbyprintedstatus",
-      "community": 101,
+      "community": 3,
       "norm_label": "listqueuejobsbyprintedstatus()"
     },
     {
@@ -18933,7 +18933,7 @@
       "source_location": "L1422",
       "_origin": "ast",
       "id": "server_postgres_listqueuedata",
-      "community": 101,
+      "community": 3,
       "norm_label": "listqueuedata()"
     },
     {
@@ -19383,7 +19383,7 @@
       "source_location": "L2394",
       "_origin": "ast",
       "id": "server_postgres_createmaintenancenotification",
-      "community": 3,
+      "community": 110,
       "norm_label": "createmaintenancenotification()"
     },
     {
@@ -19513,7 +19513,7 @@
       "source_location": "L2603",
       "_origin": "ast",
       "id": "server_postgres_listauditlogs",
-      "community": 101,
+      "community": 3,
       "norm_label": "listauditlogs()"
     },
     {
@@ -20233,7 +20233,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "server_secretcrypto",
-      "community": 110,
+      "community": 3,
       "norm_label": "secretcrypto.js"
     },
     {
@@ -20243,7 +20243,7 @@
       "source_location": "L25",
       "_origin": "ast",
       "id": "server_secretcrypto_loadkey",
-      "community": 110,
+      "community": 3,
       "norm_label": "loadkey()"
     },
     {
@@ -20253,7 +20253,7 @@
       "source_location": "L40",
       "_origin": "ast",
       "id": "server_secretcrypto_key",
-      "community": 110,
+      "community": 3,
       "norm_label": "key"
     },
     {
@@ -20263,7 +20263,7 @@
       "source_location": "L42",
       "_origin": "ast",
       "id": "server_secretcrypto_isencryptionenabled",
-      "community": 110,
+      "community": 3,
       "norm_label": "isencryptionenabled()"
     },
     {
@@ -20273,7 +20273,7 @@
       "source_location": "L46",
       "_origin": "ast",
       "id": "server_secretcrypto_isencrypted",
-      "community": 110,
+      "community": 3,
       "norm_label": "isencrypted()"
     },
     {
@@ -20283,7 +20283,7 @@
       "source_location": "L53",
       "_origin": "ast",
       "id": "server_secretcrypto_encryptsecret",
-      "community": 110,
+      "community": 3,
       "norm_label": "encryptsecret()"
     },
     {
@@ -20293,7 +20293,7 @@
       "source_location": "L68",
       "_origin": "ast",
       "id": "server_secretcrypto_decryptsecret",
-      "community": 110,
+      "community": 3,
       "norm_label": "decryptsecret()"
     },
     {
@@ -20453,7 +20453,7 @@
       "source_location": "L104",
       "_origin": "ast",
       "id": "server_statuslightbroker_getstatuslightdevices",
-      "community": 101,
+      "community": 17,
       "norm_label": "getstatuslightdevices()"
     },
     {
@@ -20573,7 +20573,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "server_updatepreflight",
-      "community": 101,
+      "community": 3,
       "norm_label": "updatepreflight.js"
     },
     {
@@ -20583,7 +20583,7 @@
       "source_location": "L28",
       "_origin": "ast",
       "id": "server_updatepreflight_check",
-      "community": 101,
+      "community": 3,
       "norm_label": "check()"
     },
     {
@@ -20593,7 +20593,7 @@
       "source_location": "L36",
       "_origin": "ast",
       "id": "server_updatepreflight_probeupdater",
-      "community": 101,
+      "community": 3,
       "norm_label": "probeupdater()"
     },
     {
@@ -20603,7 +20603,7 @@
       "source_location": "L52",
       "_origin": "ast",
       "id": "server_updatepreflight_lastbackupagems",
-      "community": 101,
+      "community": 3,
       "norm_label": "lastbackupagems()"
     },
     {
@@ -20613,7 +20613,7 @@
       "source_location": "L78",
       "_origin": "ast",
       "id": "server_updatepreflight_runupdatepreflight",
-      "community": 101,
+      "community": 3,
       "norm_label": "runupdatepreflight()"
     },
     {
@@ -32173,7 +32173,7 @@
       "source_location": "L1200",
       "_origin": "ast",
       "id": "api_queue_submission_window_api_settings_queue_availability_api_queue_availability",
-      "community": 72,
+      "community": 199,
       "norm_label": "queue submission window (`/api/settings/queue-availability`, `/api/queue/availability`)"
     },
     {
@@ -32183,7 +32183,7 @@
       "source_location": "L1210",
       "_origin": "ast",
       "id": "api_get_api_settings_queue_availability",
-      "community": 72,
+      "community": 199,
       "norm_label": "`get /api/settings/queue-availability`"
     },
     {
@@ -32193,7 +32193,7 @@
       "source_location": "L1227",
       "_origin": "ast",
       "id": "api_put_api_settings_queue_availability",
-      "community": 72,
+      "community": 199,
       "norm_label": "`put /api/settings/queue-availability`"
     },
     {
@@ -32203,7 +32203,7 @@
       "source_location": "L1239",
       "_origin": "ast",
       "id": "api_get_api_queue_availability",
-      "community": 72,
+      "community": 199,
       "norm_label": "`get /api/queue/availability`"
     },
     {
@@ -32213,7 +32213,7 @@
       "source_location": "L1254",
       "_origin": "ast",
       "id": "api_post_api_queue_availability_bypass",
-      "community": 72,
+      "community": 199,
       "norm_label": "`post /api/queue/availability/bypass`"
     },
     {
@@ -32223,7 +32223,7 @@
       "source_location": "L1267",
       "_origin": "ast",
       "id": "api_post_api_queue_submit_amended",
-      "community": 72,
+      "community": 199,
       "norm_label": "`post /api/queue/submit` (amended)"
     },
     {
@@ -32383,7 +32383,7 @@
       "source_location": "L1487",
       "_origin": "ast",
       "id": "api_operational_endpoints",
-      "community": 213,
+      "community": 72,
       "norm_label": "operational endpoints"
     },
     {
@@ -32393,7 +32393,7 @@
       "source_location": "L1493",
       "_origin": "ast",
       "id": "api_get_healthz",
-      "community": 213,
+      "community": 72,
       "norm_label": "`get /healthz`"
     },
     {
@@ -32403,7 +32403,7 @@
       "source_location": "L1503",
       "_origin": "ast",
       "id": "api_get_readyz",
-      "community": 213,
+      "community": 72,
       "norm_label": "`get /readyz`"
     },
     {
@@ -32413,7 +32413,7 @@
       "source_location": "L1524",
       "_origin": "ast",
       "id": "api_get_metrics",
-      "community": 213,
+      "community": 72,
       "norm_label": "`get /metrics`"
     },
     {
@@ -32577,20 +32577,20 @@
       "norm_label": "multi-container stack (when you need the pieces back)"
     },
     {
-      "label": "Production deploy + one-click updates (multi-container)",
+      "label": "Production deploy + one-click updates",
       "file_type": "document",
       "source_file": "README.md",
       "source_location": "L148",
       "_origin": "ast",
-      "id": "readme_production_deploy_one_click_updates_multi_container",
+      "id": "readme_production_deploy_one_click_updates",
       "community": 87,
-      "norm_label": "production deploy + one-click updates (multi-container)"
+      "norm_label": "production deploy + one-click updates"
     },
     {
       "label": "Frontend-only development",
       "file_type": "document",
       "source_file": "README.md",
-      "source_location": "L158",
+      "source_location": "L159",
       "_origin": "ast",
       "id": "readme_frontend_only_development",
       "community": 87,
@@ -32600,7 +32600,7 @@
       "label": "\ud83c\udfd7\ufe0f Architecture",
       "file_type": "document",
       "source_file": "README.md",
-      "source_location": "L169",
+      "source_location": "L170",
       "_origin": "ast",
       "id": "readme_architecture",
       "community": 31,
@@ -32610,7 +32610,7 @@
       "label": "\u2699\ufe0f Environment",
       "file_type": "document",
       "source_file": "README.md",
-      "source_location": "L207",
+      "source_location": "L208",
       "_origin": "ast",
       "id": "readme_environment",
       "community": 31,
@@ -32620,7 +32620,7 @@
       "label": "\ud83d\udc40 Viewer Mode",
       "file_type": "document",
       "source_file": "README.md",
-      "source_location": "L227",
+      "source_location": "L228",
       "_origin": "ast",
       "id": "readme_viewer_mode",
       "community": 31,
@@ -32630,7 +32630,7 @@
       "label": "\ud83d\udda8\ufe0f Printer Profiles",
       "file_type": "document",
       "source_file": "README.md",
-      "source_location": "L236",
+      "source_location": "L237",
       "_origin": "ast",
       "id": "readme_printer_profiles",
       "community": 31,
@@ -32640,7 +32640,7 @@
       "label": "\ud83d\udd27 Preventive Maintenance",
       "file_type": "document",
       "source_file": "README.md",
-      "source_location": "L245",
+      "source_location": "L246",
       "_origin": "ast",
       "id": "readme_preventive_maintenance",
       "community": 31,
@@ -32650,7 +32650,7 @@
       "label": "\ud83e\uddf5 Filament Station",
       "file_type": "document",
       "source_file": "README.md",
-      "source_location": "L254",
+      "source_location": "L255",
       "_origin": "ast",
       "id": "readme_filament_station",
       "community": 31,
@@ -32660,7 +32660,7 @@
       "label": "\ud83c\udfe0 Home Assistant Integration",
       "file_type": "document",
       "source_file": "README.md",
-      "source_location": "L265",
+      "source_location": "L266",
       "_origin": "ast",
       "id": "readme_home_assistant_integration",
       "community": 31,
@@ -32670,7 +32670,7 @@
       "label": "\ud83d\udce1 Real-Time Events & Network Usage",
       "file_type": "document",
       "source_file": "README.md",
-      "source_location": "L274",
+      "source_location": "L275",
       "_origin": "ast",
       "id": "readme_real_time_events_network_usage",
       "community": 31,
@@ -32680,7 +32680,7 @@
       "label": "\ud83d\udcdd Print Request Form",
       "file_type": "document",
       "source_file": "README.md",
-      "source_location": "L279",
+      "source_location": "L280",
       "_origin": "ast",
       "id": "readme_print_request_form",
       "community": 31,
@@ -32690,7 +32690,7 @@
       "label": "\ud83d\udce5 Queue Behavior",
       "file_type": "document",
       "source_file": "README.md",
-      "source_location": "L288",
+      "source_location": "L289",
       "_origin": "ast",
       "id": "readme_queue_behavior",
       "community": 31,
@@ -32700,7 +32700,7 @@
       "label": "\ud83d\udd14 Notifications",
       "file_type": "document",
       "source_file": "README.md",
-      "source_location": "L296",
+      "source_location": "L297",
       "_origin": "ast",
       "id": "readme_notifications",
       "community": 31,
@@ -32710,7 +32710,7 @@
       "label": "\ud83d\udd87\ufe0f Slicer Proxy",
       "file_type": "document",
       "source_file": "README.md",
-      "source_location": "L303",
+      "source_location": "L304",
       "_origin": "ast",
       "id": "readme_slicer_proxy",
       "community": 31,
@@ -32720,7 +32720,7 @@
       "label": "\ud83d\udd11 API Keys and `/api/v1`",
       "file_type": "document",
       "source_file": "README.md",
-      "source_location": "L316",
+      "source_location": "L317",
       "_origin": "ast",
       "id": "readme_api_keys_and_api_v1",
       "community": 31,
@@ -32730,7 +32730,7 @@
       "label": "\ud83e\udd16 MCP Server",
       "file_type": "document",
       "source_file": "README.md",
-      "source_location": "L342",
+      "source_location": "L343",
       "_origin": "ast",
       "id": "readme_mcp_server",
       "community": 31,
@@ -32740,7 +32740,7 @@
       "label": "\ud83d\udcca Monitoring (Prometheus + Grafana)",
       "file_type": "document",
       "source_file": "README.md",
-      "source_location": "L352",
+      "source_location": "L353",
       "_origin": "ast",
       "id": "readme_monitoring_prometheus_grafana",
       "community": 31,
@@ -32750,7 +32750,7 @@
       "label": "\ud83d\udd17 Related Projects",
       "file_type": "document",
       "source_file": "README.md",
-      "source_location": "L380",
+      "source_location": "L381",
       "_origin": "ast",
       "id": "readme_related_projects",
       "community": 31,
@@ -32760,7 +32760,7 @@
       "label": "\ud83c\udfed Image builds (CI)",
       "file_type": "document",
       "source_file": "README.md",
-      "source_location": "L387",
+      "source_location": "L388",
       "_origin": "ast",
       "id": "readme_image_builds_ci",
       "community": 31,
@@ -32770,7 +32770,7 @@
       "label": "\u2705 Validation",
       "file_type": "document",
       "source_file": "README.md",
-      "source_location": "L399",
+      "source_location": "L409",
       "_origin": "ast",
       "id": "readme_validation",
       "community": 31,
@@ -32780,7 +32780,7 @@
       "label": "\ud83d\udd12 Notes",
       "file_type": "document",
       "source_file": "README.md",
-      "source_location": "L415",
+      "source_location": "L425",
       "_origin": "ast",
       "id": "readme_notes",
       "community": 31,
@@ -36130,7 +36130,7 @@
       "source_location": "L5",
       "weight": 1.0,
       "source": "eslint_config",
-      "target": "home_saral_3d_farmlab_claude_worktrees_loving_volhard_695031_firmware_status_light_src_config_deviceconfig_valid",
+      "target": "home_saral_3d_farmlab_claude_worktrees_loving_volhard_695031_firmware_status_light_src_config_deviceconfig_commonanode",
       "confidence_score": 1.0
     },
     {
@@ -64048,6 +64048,17 @@
       "confidence_score": 1.0
     },
     {
+      "relation": "imports",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "poller/redis_client.py",
+      "source_location": "L18",
+      "weight": 1.0,
+      "source": "poller_redis_client",
+      "target": "go_services_cmd_web_redis",
+      "confidence_score": 1.0
+    },
+    {
       "relation": "calls",
       "context": "call",
       "confidence": "INFERRED",
@@ -64188,17 +64199,6 @@
       "weight": 1.0,
       "source": "web_ssrfsafetransport_roundtrip",
       "target": "go_services_cmd_web_ssrf_isprivatehost"
-    },
-    {
-      "relation": "imports",
-      "context": "import",
-      "confidence": "EXTRACTED",
-      "source_file": "poller/redis_client.py",
-      "source_location": "L18",
-      "weight": 1.0,
-      "source": "poller_redis_client",
-      "target": "web_ssrfblockederror",
-      "confidence_score": 1.0
     },
     {
       "relation": "method",
@@ -126245,7 +126245,7 @@
       "relation": "references",
       "confidence": "EXTRACTED",
       "source_file": "README.md",
-      "source_location": "L350",
+      "source_location": "L351",
       "weight": 1.0,
       "source": "readme",
       "target": "mcp_readme",
@@ -126265,7 +126265,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "README.md",
-      "source_location": "L316",
+      "source_location": "L317",
       "weight": 1.0,
       "source": "readme_3d_farmlab",
       "target": "readme_api_keys_and_api_v1",
@@ -126275,7 +126275,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "README.md",
-      "source_location": "L169",
+      "source_location": "L170",
       "weight": 1.0,
       "source": "readme_3d_farmlab",
       "target": "readme_architecture",
@@ -126285,7 +126285,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "README.md",
-      "source_location": "L207",
+      "source_location": "L208",
       "weight": 1.0,
       "source": "readme_3d_farmlab",
       "target": "readme_environment",
@@ -126305,7 +126305,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "README.md",
-      "source_location": "L254",
+      "source_location": "L255",
       "weight": 1.0,
       "source": "readme_3d_farmlab",
       "target": "readme_filament_station",
@@ -126315,7 +126315,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "README.md",
-      "source_location": "L265",
+      "source_location": "L266",
       "weight": 1.0,
       "source": "readme_3d_farmlab",
       "target": "readme_home_assistant_integration",
@@ -126325,7 +126325,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "README.md",
-      "source_location": "L387",
+      "source_location": "L388",
       "weight": 1.0,
       "source": "readme_3d_farmlab",
       "target": "readme_image_builds_ci",
@@ -126335,7 +126335,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "README.md",
-      "source_location": "L342",
+      "source_location": "L343",
       "weight": 1.0,
       "source": "readme_3d_farmlab",
       "target": "readme_mcp_server",
@@ -126345,7 +126345,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "README.md",
-      "source_location": "L352",
+      "source_location": "L353",
       "weight": 1.0,
       "source": "readme_3d_farmlab",
       "target": "readme_monitoring_prometheus_grafana",
@@ -126355,7 +126355,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "README.md",
-      "source_location": "L415",
+      "source_location": "L425",
       "weight": 1.0,
       "source": "readme_3d_farmlab",
       "target": "readme_notes",
@@ -126365,7 +126365,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "README.md",
-      "source_location": "L296",
+      "source_location": "L297",
       "weight": 1.0,
       "source": "readme_3d_farmlab",
       "target": "readme_notifications",
@@ -126385,7 +126385,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "README.md",
-      "source_location": "L245",
+      "source_location": "L246",
       "weight": 1.0,
       "source": "readme_3d_farmlab",
       "target": "readme_preventive_maintenance",
@@ -126395,7 +126395,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "README.md",
-      "source_location": "L279",
+      "source_location": "L280",
       "weight": 1.0,
       "source": "readme_3d_farmlab",
       "target": "readme_print_request_form",
@@ -126405,7 +126405,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "README.md",
-      "source_location": "L236",
+      "source_location": "L237",
       "weight": 1.0,
       "source": "readme_3d_farmlab",
       "target": "readme_printer_profiles",
@@ -126415,7 +126415,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "README.md",
-      "source_location": "L288",
+      "source_location": "L289",
       "weight": 1.0,
       "source": "readme_3d_farmlab",
       "target": "readme_queue_behavior",
@@ -126435,7 +126435,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "README.md",
-      "source_location": "L274",
+      "source_location": "L275",
       "weight": 1.0,
       "source": "readme_3d_farmlab",
       "target": "readme_real_time_events_network_usage",
@@ -126445,7 +126445,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "README.md",
-      "source_location": "L380",
+      "source_location": "L381",
       "weight": 1.0,
       "source": "readme_3d_farmlab",
       "target": "readme_related_projects",
@@ -126455,7 +126455,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "README.md",
-      "source_location": "L303",
+      "source_location": "L304",
       "weight": 1.0,
       "source": "readme_3d_farmlab",
       "target": "readme_slicer_proxy",
@@ -126465,7 +126465,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "README.md",
-      "source_location": "L399",
+      "source_location": "L409",
       "weight": 1.0,
       "source": "readme_3d_farmlab",
       "target": "readme_validation",
@@ -126475,7 +126475,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "README.md",
-      "source_location": "L227",
+      "source_location": "L228",
       "weight": 1.0,
       "source": "readme_3d_farmlab",
       "target": "readme_viewer_mode",
@@ -126485,7 +126485,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "README.md",
-      "source_location": "L158",
+      "source_location": "L159",
       "weight": 1.0,
       "source": "readme_quick_start",
       "target": "readme_frontend_only_development",
@@ -126508,7 +126508,7 @@
       "source_location": "L148",
       "weight": 1.0,
       "source": "readme_quick_start",
-      "target": "readme_production_deploy_one_click_updates_multi_container",
+      "target": "readme_production_deploy_one_click_updates",
       "confidence_score": 1.0
     },
     {
@@ -128560,5 +128560,5 @@
       "source_file": "monitoring/README.md"
     }
   ],
-  "built_at_commit": "44a69adde4f97c7ed5e81ce6cba20a7bfe25cce4"
+  "built_at_commit": "f3f2839ce76b5d813ddb46ec44c0f46d54042c72"
 }

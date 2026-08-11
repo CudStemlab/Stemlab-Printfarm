@@ -23,9 +23,9 @@
 #
 #   docker compose -f docker-compose.multi.yml up --build
 #
-# Reach for it when you need nginx's rate limiting, the bundled Prometheus, the
-# Watchtower one-click update path, poller sharding, or per-service scaling.
-# Both read the same .env and the same schema.
+# Reach for it when you need nginx's rate limiting, the bundled Prometheus,
+# poller sharding, or per-service scaling. It builds from source — CI publishes
+# only this stack's image. Both read the same .env and the same schema.
 
 services:
   printfarm:
@@ -111,10 +111,11 @@ services:
       SLICER_GRANT_SECRET: ${SLICER_GRANT_SECRET:-}
       STATUS_LIGHT_ENABLED: ${STATUS_LIGHT_ENABLED:-true}
       STATUS_LIGHT_MQTT_ENABLED: ${STATUS_LIGHT_MQTT_ENABLED:-true}
-      # Admin update check. The one-click apply path needs a Watchtower sidecar,
-      # which this deployment intentionally doesn't have — leave WATCHTOWER_URL
-      # empty and update with `docker compose up --build -d`; the check itself
-      # still reports when a newer commit exists.
+      # Admin update check. Deploys are manual: leave WATCHTOWER_TOKEN empty (it
+      # is what shows the in-app "Update now" / "Roll back" buttons) and update
+      # with `docker compose up --build -d`, or `pull` + `up -d` with
+      # docker-compose.deploy.yml on a host running the published image. The
+      # check itself still reports when a newer commit exists.
       UPDATE_CHECK_REPO: ${UPDATE_CHECK_REPO:-}
       UPDATE_CHECK_BRANCH: ${UPDATE_CHECK_BRANCH:-main}
       UPDATE_CHECK_TOKEN: ${UPDATE_CHECK_TOKEN:-}

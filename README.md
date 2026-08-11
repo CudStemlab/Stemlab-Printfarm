@@ -97,7 +97,7 @@
 **Operations**
 - Preventive maintenance tracking: per-printer health score, auto-created service tasks by print-hour interval
 - Filament Station: spool inventory, AMS/tray assignment, NFC read/write of OpenSpool tags (Android web + companion iOS app)
-- One-click admin software update (Watchtower-backed) with version/commit comparison
+- Admin software-update card: compares the running commit against the latest on GitHub
 - Real-time events over SSE (`/api/events`) — new-job and maintenance toasts without polling
 - Network usage analytics page — traffic by route, live throughput, poller bandwidth
 - Prometheus exporter + ready-to-import Grafana dashboard
@@ -132,7 +132,7 @@ The default `docker-compose.yml` builds `Dockerfile.single`: **one container** h
 | nginx | Node terminates the public port. CSP/HSTS/CSRF already live in the app, but nginx's **request-rate and connection limits are gone** — put TLS *and* rate limiting on an external reverse proxy (Cloudflare Tunnel, Traefik, host nginx) for an internet-facing deploy. `TRUST_PROXY_HEADERS` defaults to `false` here so client-supplied `X-Forwarded-For` can't forge audit IPs; set it `true` once a trusted proxy overwrites those headers. |
 | Redis | Optional acceleration only — sessions/rate-limit/telemetry fall back to Postgres/in-memory. Point `REDIS_URL` at an external instance to re-enable. |
 | Prometheus | Scrape the container from an external Prometheus: `:9180` (farm `printfarm_*`) and `:9181` (web `printfarm_web_*`), both published on loopback. Grafana dashboards are unchanged. |
-| Rolling per-service restarts | An update recreates the one container, so PostgreSQL bounces with it — a short full outage instead of a service-by-service restart. One-click updates still work via `docker-compose.deploy.yml`. |
+| Rolling per-service restarts | An update recreates the one container, so PostgreSQL bounces with it — a short full outage instead of a service-by-service restart. |
 | Poller sharding / per-service scaling | A single container is always shard 0. |
 
 ### Multi-container stack (when you need the pieces back)
@@ -145,16 +145,20 @@ docker compose -f docker-compose.multi.yml up --build    # or: make up-multi
 
 Both stacks read the same `.env` and the same database schema, so you can move between them — just not on the same host ports at once.
 
-### Production deploy + one-click updates
+### Production deploy (manual)
 
-`docker-compose.deploy.yml` overlays the default stack: it runs the **published image** instead of building from source, and adds a **Watchtower** sidecar so admins can apply new versions from Settings → Maintenance without shelling into the host:
+`docker-compose.deploy.yml` overlays the default stack to run the **published image** instead of building from source. Deploys are **manual** — nothing on the host watches the registry:
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.deploy.yml pull
-docker compose -f docker-compose.yml -f docker-compose.deploy.yml up -d
+docker compose -f docker-compose.yml -f docker-compose.deploy.yml up -d     # or: make deploy-pull
 ```
 
-Configure in `.env`: `IMAGE_PREFIX` (the Docker Hub namespace CI pushed images under), `UPDATE_CHECK_REPO` (`owner/repo`, so the admin update card can diff the running commit against the latest on GitHub), and `WATCHTOWER_TOKEN` (a shared secret — leave empty to hide the one-click apply button and keep update *checking* without allowing *applying*). On a rootless-Docker host, also set `WATCHTOWER_DOCKER_SOCK` to the per-user socket.
+The dashboard still tells you when a newer commit exists (Settings → Maintenance compares the baked `APP_VERSION` against `UPDATE_CHECK_BRANCH`); it just doesn't apply it. Leave **`WATCHTOWER_TOKEN` empty** — that variable is what shows the in-app "Update now" / "Roll back" buttons, and without an updater sidecar they'd fail when clicked.
+
+**Rolling back:** run `.github/workflows/rollback.yml` from the repo's Actions tab with the target commit SHA — it re-points `printfarm:latest` at that commit's immutable `sha-<12>` tag registry-side — then pull + `up -d` on the host. ⚠️ Migrations are forward-only and are *not* reverted, so the older image must tolerate the newer schema.
+
+Configure in `.env`: `IMAGE_PREFIX` (the Docker Hub namespace CI pushed the image under) and `UPDATE_CHECK_REPO` (`owner/repo`, so the admin update card can diff the running commit against the latest on GitHub).
 
 ### Frontend-only development
 
@@ -219,7 +223,7 @@ Key settings in `.env.example`:
 | `PRINTER_OFFLINE_GRACE_SECONDS` | Delay before a printer is marked offline / notified |
 | `PROMETHEUS_PORT` | Host port for Prometheus (default `9090`) — multi-container stack only |
 | `EXPORTER_PORT` | Internal metrics-exporter port (default `9180`) |
-| `IMAGE_PREFIX`, `UPDATE_CHECK_REPO`, `WATCHTOWER_TOKEN` | Production deploy overlay (`docker-compose.deploy.yml`, multi-container) — one-click admin software updates |
+| `IMAGE_PREFIX`, `UPDATE_CHECK_REPO` | Production deploy overlay (`docker-compose.deploy.yml`) — run the published image; `UPDATE_CHECK_REPO` powers the "update available" card |
 | `PRINTER_SECRET_KEY` | AES-256-GCM key to encrypt printer connection secrets at rest (must match across `web`, `slicer-proxy`, `poller`) |
 | `REDIS_URL` | Optional Redis cache/shared-counter in front of Postgres; degrades gracefully if unset |
 

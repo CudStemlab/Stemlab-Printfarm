@@ -5,8 +5,12 @@
 # `docker-compose.yml` — the default — now runs the whole farm in ONE container
 # instead (see Dockerfile.single). Use THIS file when you need what the single
 # container drops: nginx as the edge (its request/connection rate limiting, the
-# /prometheus route), Redis, a bundled Prometheus, the Watchtower one-click
-# update path, poller sharding, or independent scaling of any service.
+# /prometheus route), Redis, a bundled Prometheus, poller sharding, or
+# independent scaling of any service.
+#
+# NOTE: this stack has no published images — CI builds only the single-container
+# image — so it always builds from source (`--build`), and docker-compose.deploy.yml
+# does not apply to it.
 #
 # Both stacks read the same .env and the same database schema, so you can move
 # between them; they must not run against the same host ports at the same time.
@@ -157,10 +161,11 @@ services:
       UPDATE_CHECK_REPO: ${UPDATE_CHECK_REPO:-}
       UPDATE_CHECK_BRANCH: ${UPDATE_CHECK_BRANCH:-main}
       UPDATE_CHECK_TOKEN: ${UPDATE_CHECK_TOKEN:-}
-      # One-click apply target: the Watchtower sidecar's HTTP API (see
-      # docker-compose.deploy.yml). WATCHTOWER_TOKEN must match the sidecar's
-      # token; empty = the "Update now" button is hidden and the apply endpoint
-      # returns 503.
+      # One-click apply target: a Watchtower sidecar's HTTP API. No sidecar ships
+      # with this stack any more (docker-compose.deploy.yml targets the
+      # single-container default and carries no Watchtower either), so leave
+      # WATCHTOWER_TOKEN empty — that hides the "Update now" button and makes the
+      # apply endpoint return 503. Deploys are manual.
       WATCHTOWER_URL: ${WATCHTOWER_URL:-http://watchtower:8080/v1/update}
       WATCHTOWER_TOKEN: ${WATCHTOWER_TOKEN:-}
       # Rollback (admin "Roll back" button). Watchtower can only re-pull the same
