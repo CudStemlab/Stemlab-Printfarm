@@ -16,12 +16,14 @@ npm run build     # TypeScript validation + production build
 npm run preview
 ```
 
-**Full stack — Docker Compose (PostgreSQL + Node API + nginx + Python poller):**
+**Full stack — Docker Compose.** The default `docker-compose.yml` is the **single-container** stack (`Dockerfile.single`: PostgreSQL + Node web with the slicer proxy and MCP server embedded + Go poller + Go exporter, all in one image):
 ```bash
 cp .env.example .env   # first time only — review values
 docker compose up --build
 # App: http://localhost:8080   Health: http://localhost:8080/healthz
 ```
+
+The original eight-service split stack (nginx, Redis, Prometheus, one container per service) lives on as `docker-compose.multi.yml` — `docker compose -f docker-compose.multi.yml up --build` (`make up-multi`). Use it when a change touches nginx, Redis, Prometheus, Watchtower one-click updates, or poller sharding; those exist only there.
 
 There is no `npm test`. Frontend validation = `npm run build`. Full-stack smoke test = `docker compose up --build`, then verify dashboard, queue, analytics, settings, and printer detail views render without console errors.
 
@@ -33,7 +35,7 @@ password. There is no shipped default — `admin / "admin"` no longer exists.
 
 ## Architecture
 
-Eight services orchestrated via Docker Compose:
+The split stack (`docker-compose.multi.yml`) is eight services; the default single-container stack runs the same roles as processes inside one image (see "Single-container packaging" below). Either way the responsibilities are:
 
 | Service | Tech | Role |
 |---------|------|------|
@@ -58,7 +60,7 @@ Browser → nginx:8080 → Node web:5173
                               └── /__printer_webcam/* → printer webcam stream
 ```
 
-**Single-container packaging (`Dockerfile.single` + `docker-compose.single.yml`):** The same code also ships as **one container** — `docker compose -f docker-compose.single.yml up --build`. It bundles PostgreSQL 16 (in-container, loopback-only, `pgdata` volume, `initdb` on first boot), the Node web server, the Go poller and the Go exporter, supervised by `docker/single/entrypoint.sh` (bash: starts pg → web → waits for `/readyz` → exporter + poller; `wait -n`, so the first child to exit takes the container down; SIGTERM drains children then `pg_ctl -m fast stop`). Every process — PostgreSQL included — runs as the unprivileged `printfarm` user, so `cap_drop: ALL` still applies. The **slicer proxy and MCP server run in-process** inside the web server rather than as their own containers: `EMBED_SLICER_PROXY=true` mounts `handleSlicerProxyRequest` (exported from `slicer-proxy/index.js`, which now only self-listens when it is the process entry point) on `/printers/`, and `EMBED_MCP=true` mounts `createMcpHttpHandler` (`mcp/httpHandler.js`, extracted from `mcp/index.js` so both the container and the embed share one implementation) on `/mcp`, fail-closed behind `MCP_HTTP_PUBLIC` exactly like the nginx gate it replaces. Both are loaded by dynamic `import()` after `listen`, so the multi-container `web` image (which installs neither dependency set) is unaffected — **all three flags default off, leaving the split stack byte-identical**. Dropped: **nginx** (Node terminates the public port; the app already owns CSP/HSTS/CSRF — but nginx's request/connection rate limits are *gone*, so an internet-facing single-container deploy needs an external reverse proxy for TLS and rate limiting), **Redis** (optional; point `REDIS_URL` at an external instance), **Prometheus** (scrape `:9180` farm metrics / `:9181` web metrics externally). Two consequences worth remembering: `/metrics` used to be hidden by nginx's `404`, so `METRICS_LISTEN_PORT` (default 9181 here) moves it to its own listener and the public port 404s it; and `X-Real-IP`/`X-Forwarded-For` are client-supplied with no proxy in front, so `TRUST_PROXY_HEADERS=false` (the single-container default; `getClientIp` then uses the socket peer only) keeps login rate-limit buckets and audit IPs unforgeable. Poller sharding and multi-replica scaling remain multi-container-only.
+**Single-container packaging (`Dockerfile.single` + `docker-compose.yml`, the default stack):** `docker compose up --build` runs the whole farm in **one container**; the eight-service split stack is `docker-compose.multi.yml`. It bundles PostgreSQL 16 (in-container, loopback-only, `pgdata` volume, `initdb` on first boot), the Node web server, the Go poller and the Go exporter, supervised by `docker/single/entrypoint.sh` (bash: starts pg → web → waits for `/readyz` → exporter + poller; `wait -n`, so the first child to exit takes the container down; SIGTERM drains children then `pg_ctl -m fast stop`). Every process — PostgreSQL included — runs as the unprivileged `printfarm` user, so `cap_drop: ALL` still applies. The **slicer proxy and MCP server run in-process** inside the web server rather than as their own containers: `EMBED_SLICER_PROXY=true` mounts `handleSlicerProxyRequest` (exported from `slicer-proxy/index.js`, which now only self-listens when it is the process entry point) on `/printers/`, and `EMBED_MCP=true` mounts `createMcpHttpHandler` (`mcp/httpHandler.js`, extracted from `mcp/index.js` so both the container and the embed share one implementation) on `/mcp`, fail-closed behind `MCP_HTTP_PUBLIC` exactly like the nginx gate it replaces. Both are loaded by dynamic `import()` after `listen`, so the multi-container `web` image (which installs neither dependency set) is unaffected — **all three flags default off, leaving the split stack byte-identical**. Dropped: **nginx** (Node terminates the public port; the app already owns CSP/HSTS/CSRF — but nginx's request/connection rate limits are *gone*, so an internet-facing single-container deploy needs an external reverse proxy for TLS and rate limiting), **Redis** (optional; point `REDIS_URL` at an external instance), **Prometheus** (scrape `:9180` farm metrics / `:9181` web metrics externally). Two consequences worth remembering: `/metrics` used to be hidden by nginx's `404`, so `METRICS_LISTEN_PORT` (default 9181 here) moves it to its own listener and the public port 404s it; and `X-Real-IP`/`X-Forwarded-For` are client-supplied with no proxy in front, so `TRUST_PROXY_HEADERS=false` (the single-container default; `getClientIp` then uses the socket peer only) keeps login rate-limit buckets and audit IPs unforgeable. Poller sharding and multi-replica scaling remain multi-container-only.
 
 **Frontend layout (`src/app/`):**
 - `pages/` — full-page views (Dashboard, PrinterDetail, Queue, Analytics, Settings, Login)
@@ -134,7 +136,7 @@ This platform went through a security-architecture refactor; the model and its r
 - **Commit at end of each chat:** When a chat/task is finished and the working tree has changes, create a git commit capturing that work (use a clear, conventional commit message). Follow the feature-branch rule below — commit on a feature branch, not directly to `main`, for new feature work. Do not push unless the user asks.
 - **Feature branches:** Always create a new git branch before starting work on a new feature (never commit new feature work directly to `main`). When the feature is finished, ask the user whether to merge the branch back into `main` — do not merge without their confirmation.
 - Prefer Docker Compose for full-stack validation; npm scripts for frontend-only checks
-- When changing poller or database behavior, verify interaction with `docker-compose.yml` env vars
+- When changing poller or database behavior, verify interaction with the env vars in **both** `docker-compose.yml` (single container) and `docker-compose.multi.yml` (split stack) — they are separate files and drift silently
 - Do not commit `.env`; document defaults in `.env.example`
 - Keep sensitive printer connection details out of public viewer flows
 - **Security invariants:** before changing auth, routes, secrets, or error paths, read the `## Security` section above and `SECURITY_ARCHITECTURE.md`; authorization is default-deny (`server/rbac.js`) and must stay that way. Run `node server/rbac.test.mjs` after any route/RBAC change.

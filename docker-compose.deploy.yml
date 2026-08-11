@@ -2,11 +2,15 @@
 # .github/workflows/deploy.yml (Docker Hub) instead of building from source, and
 # adds the Watchtower sidecar that powers the admin "Update now" button.
 #
-# Usage on a deployed host:
-#   docker compose -f docker-compose.yml -f docker-compose.deploy.yml pull
-#   docker compose -f docker-compose.yml -f docker-compose.deploy.yml up -d
+# This overlay applies to the MULTI-CONTAINER stack only (docker-compose.multi.yml):
+# Watchtower recreates per-service containers, which the single-container default
+# stack doesn't have. Update that one with `docker compose up --build -d`.
 #
-# Tip: set COMPOSE_FILE="docker-compose.yml:docker-compose.deploy.yml" in the
+# Usage on a deployed host:
+#   docker compose -f docker-compose.multi.yml -f docker-compose.deploy.yml pull
+#   docker compose -f docker-compose.multi.yml -f docker-compose.deploy.yml up -d
+#
+# Tip: set COMPOSE_FILE="docker-compose.multi.yml:docker-compose.deploy.yml" in the
 # deploy host's .env (see .env.example) and Compose merges both files by
 # default — plain `docker compose up`/`down`/`pull` then just work, with no
 # `-f` flags to remember and no risk of a bare `down` skipping this file and

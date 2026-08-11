@@ -1,0 +1,512 @@
+# Multi-container stack (the original eight-service deployment).
+#
+#   docker compose -f docker-compose.multi.yml up --build
+#
+# `docker-compose.yml` — the default — now runs the whole farm in ONE container
+# instead (see Dockerfile.single). Use THIS file when you need what the single
+# container drops: nginx as the edge (its request/connection rate limiting, the
+# /prometheus route), Redis, a bundled Prometheus, the Watchtower one-click
+# update path, poller sharding, or independent scaling of any service.
+#
+# Both stacks read the same .env and the same database schema, so you can move
+# between them; they must not run against the same host ports at the same time.
+
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    # S-4 hardening: block in-container privilege escalation via setuid binaries.
+    # (cap_drop is intentionally omitted here — the postgres entrypoint runs as
+    # root and needs CHOWN/SETUID/SETGID/DAC_OVERRIDE to initialize the data dir
+    # and drop to the unprivileged `postgres` user.)
+    security_opt:
+      - "no-new-privileges:true"
+    # Data tier only: db is reachable solely from services on the internal
+    # `backend` network (web, poller, slicer-proxy, exporter, prometheus) — never
+    # from the edge-only nginx or mcp containers, and never from the host/internet.
+    networks: [backend]
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Optional Redis acceleration layer (sessions, login rate-limit, live-telemetry
+  # cache). Not published to the host — only the web and poller reach it over the
+  # internal network. AOF persistence so a restart keeps live sessions/counters.
+  # The whole stack runs fine without it: leave REDIS_URL empty in .env to disable
+  # (web/poller fall back to Postgres/in-memory) and this service idles harmlessly.
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # S-4 hardening: no-new-privileges (cap_drop omitted — the entrypoint drops
+    # to the `redis` user via su-exec, which needs SETUID/SETGID).
+    security_opt:
+      - "no-new-privileges:true"
+    # Data tier only: same isolation as db (internal `backend` network).
+    networks: [backend]
+    # L-1 FIX: require a password when REDIS_PASSWORD is set so a co-located
+    # compromised container can't read/flush rate-limit keys or sessions. Empty
+    # (the default) leaves Redis open — backward compatible with the "Redis is
+    # optional" design, for LAN-only deploys where the network is the boundary.
+    # Set REDIS_PASSWORD in .env and use redis://:<password>@redis:6379 as REDIS_URL.
+    command: ["redis-server", "--appendonly", "yes", "--save", "60", "1000", "--requirepass", "${REDIS_PASSWORD:-}"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"${REDIS_PASSWORD:-}\" ping 2>/dev/null | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+      args:
+        VITE_PUBLIC_VIEWER_MODE: ${VITE_PUBLIC_VIEWER_MODE:-false}
+        # Baked into the image as the running version. CI passes the git SHA; a
+        # local build defaults to "dev" (the update check treats "dev" as "no
+        # comparison" so it never shows a false "update available").
+        APP_VERSION: ${APP_VERSION:-dev}
+    restart: unless-stopped
+    # S-4 hardening: no privilege escalation, drop all capabilities (the Node
+    # server binds only :5173 and shells out to ffmpeg — neither needs any cap).
+    security_opt:
+      - "no-new-privileges:true"
+    cap_drop:
+      - ALL
+    # Both tiers: `frontend` for the nginx reverse proxy and outbound egress
+    # (GitHub update check, the OAuth IdP, Discord webhooks, printer LAN);
+    # `backend` for db/redis. Being on `backend` is what lets web reach the DB
+    # while db itself stays off the edge.
+    networks: [frontend, backend]
+    depends_on:
+      db:
+        condition: service_healthy
+      # Non-blocking: the Redis client connects lazily and tolerates an outage, so
+      # web never waits on Redis health — this only nudges start ordering.
+      redis:
+        condition: service_started
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:?set POSTGRES_USER}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:?set POSTGRES_DB}
+      # Postgres connection-pool sizing and safety timeouts (ms; 0 disables a
+      # timeout). Size the pool to the web-replica count vs Postgres max_connections.
+      DATABASE_POOL_MAX: ${DATABASE_POOL_MAX:-10}
+      DATABASE_POOL_IDLE_MS: ${DATABASE_POOL_IDLE_MS:-30000}
+      DATABASE_CONNECT_TIMEOUT_MS: ${DATABASE_CONNECT_TIMEOUT_MS:-5000}
+      DATABASE_STATEMENT_TIMEOUT_MS: ${DATABASE_STATEMENT_TIMEOUT_MS:-30000}
+      DATABASE_IDLE_TX_TIMEOUT_MS: ${DATABASE_IDLE_TX_TIMEOUT_MS:-60000}
+      # Optional Redis acceleration. Empty = disabled (falls back to Postgres /
+      # in-memory). Reaches the redis service over the internal compose network.
+      REDIS_URL: ${REDIS_URL:-}
+      # Observability. LOG_LEVEL (debug|info|warn|error); LOG_FORMAT (text|json —
+      # use json to ship structured logs to an aggregator); LOG_HTTP (sample|all|
+      # off) controls the per-request access log. Request metrics are always at
+      # the internal /metrics (scraped by Prometheus, 404 on the public site).
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      LOG_FORMAT: ${LOG_FORMAT:-text}
+      LOG_HTTP: ${LOG_HTTP:-sample}
+      VITE_PUBLIC_VIEWER_MODE: ${VITE_PUBLIC_VIEWER_MODE:-false}
+      MAX_BODY_BYTES: ${MAX_BODY_BYTES:-1048576}
+      # Shared with slicer-proxy: verifies the signed slicer operator-grant token.
+      SLICER_GRANT_SECRET: ${SLICER_GRANT_SECRET:-}
+      # Public origin used to build the OAuth redirect_uri when no admin
+      # override is set in Settings → Sign-in ("SSO public URL", which
+      # takes precedence over this). Set this to the site's public HTTPS URL
+      # (e.g. https://printfarm.example.com) so SSO callbacks use the right
+      # address even when nginx doesn't forward the host. Leave empty to fall
+      # back to auto-detection from X-Forwarded-Proto / Host headers.
+      APP_BASE_URL: ${APP_BASE_URL:-}
+      # Mark the login session cookie Secure (set true once served over HTTPS).
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}
+      # Encrypts printer connection secrets (LAN access codes) at rest. Must be
+      # identical across web, slicer-proxy and poller. Empty = stored plaintext.
+      PRINTER_SECRET_KEY: ${PRINTER_SECRET_KEY:-}
+      # H-2: Bambu TLS certificate verification. Bambu printers use self-signed
+      # certificates; set to "false" only when the printer cert is trusted at
+      # the OS level. Default "true" (skip) for LAN deployments.
+      BAMBU_TLS_SKIP_VERIFY: ${BAMBU_TLS_SKIP_VERIFY:-true}
+      # Max size of a model file uploaded through the in-app print-request form
+      # (stored in Postgres). The nginx /api/queue/submit body cap should match.
+      QUEUE_UPLOAD_MAX_BYTES: ${QUEUE_UPLOAD_MAX_BYTES:-52428800}
+      # Max size of a backup archive uploaded via Settings → Backup & Restore
+      # (a full-data backup, so it can be far larger than a single print-request
+      # upload). The nginx /api/admin/backup/restore body cap (BACKUP_MAX_BODY_SIZE
+      # below) should match. The upload is spooled to a temp file and read back
+      # entry by entry, so this bounds disk (BACKUP_TMP_DIR), not memory.
+      BACKUP_UPLOAD_MAX_BYTES: ${BACKUP_UPLOAD_MAX_BYTES:-2147483648}
+      # Where the restore upload is spooled. Defaults to the OS temp dir; point
+      # it at a mounted volume if the container's /tmp is small.
+      BACKUP_TMP_DIR: ${BACKUP_TMP_DIR:-}
+      # NOTE: APP_VERSION (the running git SHA) is baked into the image at build
+      # time (Dockerfile.web ENV) — it must NOT be listed here, or an unset host
+      # APP_VERSION would override the baked value with an empty string. Local
+      # source builds pass it via the build arg below instead.
+      # Admin "update available" check (Settings → Maintenance). Set
+      # UPDATE_CHECK_REPO to "owner/repo" to enable it; the server compares the
+      # running APP_VERSION against the latest commit on UPDATE_CHECK_BRANCH.
+      # UPDATE_CHECK_TOKEN (optional) lifts GitHub's unauthenticated rate limit /
+      # reaches private repos. Empty repo = feature disabled (card hidden).
+      UPDATE_CHECK_REPO: ${UPDATE_CHECK_REPO:-}
+      UPDATE_CHECK_BRANCH: ${UPDATE_CHECK_BRANCH:-main}
+      UPDATE_CHECK_TOKEN: ${UPDATE_CHECK_TOKEN:-}
+      # One-click apply target: the Watchtower sidecar's HTTP API (see
+      # docker-compose.deploy.yml). WATCHTOWER_TOKEN must match the sidecar's
+      # token; empty = the "Update now" button is hidden and the apply endpoint
+      # returns 503.
+      WATCHTOWER_URL: ${WATCHTOWER_URL:-http://watchtower:8080/v1/update}
+      WATCHTOWER_TOKEN: ${WATCHTOWER_TOKEN:-}
+      # Rollback (admin "Roll back" button). Watchtower can only re-pull the same
+      # tag, so rolling back means re-pointing `:latest` in the registry — done by
+      # .github/workflows/rollback.yml, which this token lets the web server
+      # dispatch. Use a FINE-GRAINED GitHub PAT scoped to this one repository with
+      # `Actions: read and write` and nothing else: that way a compromised web
+      # container can only re-deploy a commit CI already built, never push
+      # arbitrary images. Empty = rollback button hidden, endpoint returns 503.
+      # IMAGE_PREFIX lets the server check a sha-* tag exists before offering it.
+      UPDATE_ROLLBACK_TOKEN: ${UPDATE_ROLLBACK_TOKEN:-}
+      UPDATE_ROLLBACK_WORKFLOW: ${UPDATE_ROLLBACK_WORKFLOW:-rollback.yml}
+      IMAGE_PREFIX: ${IMAGE_PREFIX:-}
+      # Update-run lifecycle. DEADLINE_MS bounds a whole run before it is marked
+      # timed_out (pull + recreate + verify); HEALTH_PASSES is how many consecutive
+      # /readyz passes the new version must post before the run counts as
+      # succeeded — >1 so a container that boots and then crash-loops is caught
+      # instead of being reported as a successful update.
+      UPDATE_RUN_DEADLINE_MS: ${UPDATE_RUN_DEADLINE_MS:-900000}
+      UPDATE_HEALTH_PASSES: ${UPDATE_HEALTH_PASSES:-3}
+      # ESP32 status-light MQTT broker (server/statusLightBroker.js). wss-only:
+      # there is no raw-TCP listener or host port to publish — devices reach the
+      # broker at /mqtt on the normal web port through nginx, which is why no
+      # `ports:` entry is needed here at all. Set STATUS_LIGHT_ENABLED=false (or
+      # the legacy STATUS_LIGHT_MQTT_ENABLED=false) to disable the broker.
+      # STATUS_LIGHT_PUBLISH_INTERVAL_MS is how often the web tier re-reads
+      # printer status from the DB and publishes any change; STATUS_LIGHT_STALE_MS
+      # is how long since a device last reported before the dashboard shows it
+      # disconnected. Note: wss needs a certificate the device's public-CA bundle
+      # trusts (Let's Encrypt-style) — a self-signed cert will not validate (see
+      # firmware/status-light/README.md).
+      STATUS_LIGHT_ENABLED: ${STATUS_LIGHT_ENABLED:-true}
+      STATUS_LIGHT_MQTT_ENABLED: ${STATUS_LIGHT_MQTT_ENABLED:-true}
+
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:5173/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  nginx:
+    build:
+      context: .
+      dockerfile: Dockerfile.nginx
+    restart: unless-stopped
+    # S-4 hardening: no-new-privileges (cap_drop omitted — the nginx master runs
+    # as root to bind :80 and spawns workers as the `nginx` user).
+    security_opt:
+      - "no-new-privileges:true"
+    # Edge tier only: nginx proxies to web/slicer-proxy/mcp/prometheus but has NO
+    # route to db/redis — a compromised edge can't reach the data tier directly.
+    networks: [frontend]
+    depends_on:
+      web:
+        condition: service_healthy
+      # nginx resolves these upstreams at startup, so they must be up.
+      slicer-proxy:
+        condition: service_started
+      mcp:
+        condition: service_started
+      prometheus:
+        condition: service_started
+    environment:
+      # Substituted into nginx/default.conf.template at startup. Default "_"
+      # matches any Host header; set a real domain in .env for name-based vhosts.
+      SERVER_NAME: ${SERVER_NAME:-_}
+      # DDoS (L7): per-client-IP request rate, burst allowance, and max
+      # concurrent connections enforced at the nginx edge (see
+      # nginx/default.conf.template). Defaults are generous so a shared-NAT
+      # classroom isn't throttled; a real flood is still capped. Rate must carry
+      # its nginx unit (e.g. 50r/s or 600r/m).
+      RATE_LIMIT_REQ_RATE: ${RATE_LIMIT_REQ_RATE:-50r/s}
+      RATE_LIMIT_REQ_BURST: ${RATE_LIMIT_REQ_BURST:-100}
+      RATE_LIMIT_CONN: ${RATE_LIMIT_CONN:-100}
+      # C-4: slicer upload body cap passed through to the nginx template. Must be
+      # >= SLICER_UPLOAD_MAX_BYTES on the slicer-proxy service.
+      SLICER_MAX_BODY_SIZE: ${SLICER_MAX_BODY_SIZE:-500m}
+      # Backup-restore upload body cap passed through to the nginx template.
+      # Must be >= BACKUP_UPLOAD_MAX_BYTES on the web service.
+      BACKUP_MAX_BODY_SIZE: ${BACKUP_MAX_BODY_SIZE:-2048m}
+      # H-1: gates /prometheus (fail-closed — see
+      # nginx/docker-entrypoint.d/10-prometheus-htpasswd.sh). With neither var
+      # below set, /prometheus returns 403. Set PROMETHEUS_BASIC_AUTH_PASSWORD to
+      # expose it behind Basic Auth (e.g. to an external Grafana), or
+      # PROMETHEUS_ALLOW_ANONYMOUS=true to serve it with no auth on a trusted LAN.
+      PROMETHEUS_BASIC_AUTH_USER: ${PROMETHEUS_BASIC_AUTH_USER:-admin}
+      PROMETHEUS_BASIC_AUTH_PASSWORD: ${PROMETHEUS_BASIC_AUTH_PASSWORD:-}
+      PROMETHEUS_ALLOW_ANONYMOUS: ${PROMETHEUS_ALLOW_ANONYMOUS:-false}
+      # Gates the public /mcp route (see nginx/docker-entrypoint.d/15-mcp-access.sh).
+      # Default false -> /mcp returns 403 on the public site (internal-only, as the
+      # MCP server is a full farm-control surface). Set true to expose it publicly
+      # (still guarded by a printfarm_manage API key).
+      MCP_HTTP_PUBLIC: ${MCP_HTTP_PUBLIC:-false}
+    ports:
+      - "${HTTP_PORT:-8080}:80"
+
+  poller:
+    build:
+      context: .
+      dockerfile: Dockerfile.go
+      args:
+        SERVICE: poller
+    restart: unless-stopped
+    # S-4 hardening: no privilege escalation, drop all capabilities (the Go
+    # poller opens only outbound connections and needs no cap).
+    security_opt:
+      - "no-new-privileges:true"
+    cap_drop:
+      - ALL
+    # `backend` for db + the web snapshot endpoint; `frontend` supplies the
+    # default route for outbound printer-LAN egress (MQTT/FTPS/HTTP polling),
+    # which an internal-only network would block.
+    networks: [frontend, backend]
+    depends_on:
+      db:
+        condition: service_healthy
+      # Non-blocking (see web): the poller's Redis client tolerates an outage.
+      redis:
+        condition: service_started
+    environment:
+      # Least-privilege (HP-9, §11.4): set POLLER_DATABASE_URL to the pf_poller
+      # role (SELECT-all + telemetry writes only) once provisioned via
+      # db/roles/least-privilege-roles.sql. Smoke-test the poller boots against
+      # the reduced role before enabling in production. Defaults to the superuser
+      # URL so an un-migrated deployment is unchanged.
+      DATABASE_URL: ${POLLER_DATABASE_URL:-postgresql://${POSTGRES_USER:?set POSTGRES_USER}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:?set POSTGRES_DB}}
+      # Postgres connection safety timeouts (ms; 0 disables). Mirror the Node pool.
+      DATABASE_CONNECT_TIMEOUT_MS: ${DATABASE_CONNECT_TIMEOUT_MS:-5000}
+      DATABASE_STATEMENT_TIMEOUT_MS: ${DATABASE_STATEMENT_TIMEOUT_MS:-30000}
+      DATABASE_IDLE_TX_TIMEOUT_MS: ${DATABASE_IDLE_TX_TIMEOUT_MS:-60000}
+      # Optional Redis acceleration. Empty = disabled (telemetry stays Postgres-only).
+      REDIS_URL: ${REDIS_URL:-}
+      PRINTER_POLL_INTERVAL_MS: ${PRINTER_POLL_INTERVAL_MS:-4000}
+      PRINTER_REQUEST_TIMEOUT_MS: ${PRINTER_REQUEST_TIMEOUT_MS:-3000}
+      PRINTER_OFFLINE_GRACE_SECONDS: ${PRINTER_OFFLINE_GRACE_SECONDS:-30}
+      # The poller writes a printer row only when its telemetry changed; this caps
+      # how long an unchanged row can go without a write (safety net). 0 = write
+      # every cycle (the previous behavior).
+      PRINTER_PERSIST_MAX_INTERVAL_MS: ${PRINTER_PERSIST_MAX_INTERVAL_MS:-30000}
+      # Refresh concurrency. 0 = auto-size the worker pool to the printer count
+      # (capped by _MAX); set an explicit number to pin it. Raise _MAX if cycles
+      # overrun the interval with many slow/offline printers.
+      PRINTER_POLL_CONCURRENCY: ${PRINTER_POLL_CONCURRENCY:-0}
+      PRINTER_POLL_CONCURRENCY_MAX: ${PRINTER_POLL_CONCURRENCY_MAX:-64}
+      # Horizontal sharding. Default is a single shard owning every printer. To
+      # split the farm across replicas, define one poller service per shard, each
+      # with the same POLLER_SHARD_COUNT and a distinct POLLER_SHARD_INDEX (0..N-1).
+      POLLER_SHARD_COUNT: ${POLLER_SHARD_COUNT:-1}
+      POLLER_SHARD_INDEX: ${POLLER_SHARD_INDEX:-0}
+      # Must match the web service: used to decrypt printer secrets read from the DB.
+      PRINTER_SECRET_KEY: ${PRINTER_SECRET_KEY:-}
+      # H-2: must match the web service (see web service comment above).
+      BAMBU_TLS_SKIP_VERIFY: ${BAMBU_TLS_SKIP_VERIFY:-true}
+      # H-2 cert pinning: since Bambu certs are self-signed (skip-verify), pin
+      # each printer's cert fingerprint to close the LAN MITM window without a CA.
+      # Format: "<serial>=<sha256-fp>,<serial2>=<fp2>". The poller logs each
+      # observed fingerprint (grep "H-2: bambu serial") so you can capture it,
+      # then set it here to ENFORCE (a mismatching cert is rejected). Empty
+      # (default) = observe-only, no printer is pinned, no behavior change.
+      BAMBU_CERT_PINS: ${BAMBU_CERT_PINS:-}
+      # Bambu cameras aren't plain HTTP, so the poller grabs their Discord-snapshot
+      # frames from the web service's /__printer_webcam/<id>/snapshot.jpg endpoint
+      # over the internal network (it speaks the port-6000 / RTSP camera protocols).
+      WEB_SNAPSHOT_BASE_URL: ${WEB_SNAPSHOT_BASE_URL:-http://web:5173}
+
+  # Slicer-upload proxy: an OctoPrint-compatible endpoint a slicer (Orca etc.)
+  # can push sliced files to. Authenticated with named API keys (managed in
+  # Settings → Slicer Upload). Not published to the host — nginx routes /printers/
+  # to it over the internal network, so the slicer reaches it on the same domain
+  # as the dashboard: http://<domain>/printers/<id>.
+  slicer-proxy:
+    build:
+      context: .
+      dockerfile: Dockerfile.slicer-proxy
+    restart: unless-stopped
+    # S-4 hardening: no privilege escalation, drop all capabilities.
+    security_opt:
+      - "no-new-privileges:true"
+    cap_drop:
+      - ALL
+    # `frontend` for the nginx /printers/ proxy + printer-LAN egress (FTPS/MQTT);
+    # `backend` for the DB read of printer connection secrets.
+    networks: [frontend, backend]
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      # Least-privilege (HP-9, §11.4): set SLICER_DATABASE_URL to the pf_slicer
+      # role (SELECT-all + audit/estimate inserts + key-touch update) once
+      # provisioned via db/roles/least-privilege-roles.sql. Defaults to the
+      # superuser URL so an un-migrated deployment is unchanged.
+      DATABASE_URL: ${SLICER_DATABASE_URL:-postgresql://${POSTGRES_USER:?set POSTGRES_USER}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:?set POSTGRES_DB}}
+      # Shares server/postgres.js with web, so the same pool sizing/timeout knobs apply.
+      DATABASE_POOL_MAX: ${DATABASE_POOL_MAX:-10}
+      DATABASE_POOL_IDLE_MS: ${DATABASE_POOL_IDLE_MS:-30000}
+      DATABASE_CONNECT_TIMEOUT_MS: ${DATABASE_CONNECT_TIMEOUT_MS:-5000}
+      DATABASE_STATEMENT_TIMEOUT_MS: ${DATABASE_STATEMENT_TIMEOUT_MS:-30000}
+      DATABASE_IDLE_TX_TIMEOUT_MS: ${DATABASE_IDLE_TX_TIMEOUT_MS:-60000}
+      SLICER_PROXY_PORT: ${SLICER_PROXY_PORT:-8091}
+      # Used to redirect a slicer's "Device" tab to the dashboard's printer page.
+      HTTP_PORT: ${HTTP_PORT:-8080}
+      APP_BASE_URL: ${APP_BASE_URL:-}
+      # Shared with web: signs the slicer operator-grant token the device-tab
+      # redirect carries. Must match the web service's value exactly.
+      SLICER_GRANT_SECRET: ${SLICER_GRANT_SECRET:-}
+      # Must match the web service: decrypts the printer secret read from the DB
+      # before dispatching the upload to the printer hardware.
+      PRINTER_SECRET_KEY: ${PRINTER_SECRET_KEY:-}
+      # C-4 FIX: cap the in-memory multipart buffer. Must be <= the nginx
+      # client_max_body_size for /printers/ (SLICER_MAX_BODY_SIZE). Default 500 MB.
+      SLICER_UPLOAD_MAX_BYTES: ${SLICER_UPLOAD_MAX_BYTES:-524288000}
+      # Auto-map slicer pushes onto the printer's AMS trays (material match,
+      # color preferred). Set false to always demand the external spool.
+      SLICER_AMS_AUTO: ${SLICER_AMS_AUTO:-true}
+
+  # MCP (Model Context Protocol) server: exposes the farm's /api/v1 surface as
+  # MCP tools so an LLM client (Claude Desktop / Claude Code) can monitor and
+  # control the farm. Holds no state and never touches the DB — it is a thin
+  # client of web:5173/api/v1, forwarding the caller's printfarm_manage API key.
+  # Not published to the host — nginx routes /mcp to it over the internal network
+  # (Streamable HTTP), so a remote client reaches it at http://<domain>/mcp.
+  mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile.mcp
+    restart: unless-stopped
+    # S-4 hardening: no privilege escalation, drop all capabilities.
+    security_opt:
+      - "no-new-privileges:true"
+    cap_drop:
+      - ALL
+    # Edge tier ONLY: the MCP/AI control surface is a thin client of web's
+    # /api/v1 and must never touch the DB directly. Keeping it off `backend`
+    # means a prompt-injected / compromised MCP process has no route to db/redis
+    # — it can only reach the API web already authorizes and audits (S-5).
+    networks: [frontend]
+    depends_on:
+      web:
+        condition: service_healthy
+    environment:
+      # The MCP server calls the data API over the internal compose network.
+      PRINTFARM_API_BASE: ${PRINTFARM_API_BASE:-http://web:5173}
+      # http = Streamable HTTP behind nginx (default); stdio is for local use.
+      MCP_TRANSPORT: ${MCP_TRANSPORT:-http}
+      MCP_PORT: ${MCP_PORT:-8092}
+      # PRINTFARM_API_KEY is only used when MCP_TRANSPORT=stdio (single local
+      # user). Over HTTP the key is taken per-request from the caller's header.
+      PRINTFARM_API_KEY: ${PRINTFARM_API_KEY:-}
+      # AI-agent least privilege (S-5). 'restricted' (default) lets the admin
+      # escape-hatch READ any /api/v1 admin surface but REFUSES writes to the
+      # privilege-escalation surfaces (slicer-keys, users, admin-credential,
+      # manager-requests, settings) — so a prompt-injected agent can't mint
+      # itself a key, reset the admin password, or create a backdoor account.
+      # Set 'full' to restore unrestricted escape-hatch writes.
+      MCP_ADMIN_MODE: ${MCP_ADMIN_MODE:-restricted}
+
+  # Read-only Prometheus exporter: exposes the PostgreSQL print-farm data as
+  # metrics on :9180/metrics. Not published to the host — Prometheus scrapes it
+  # over the internal network, so metrics never reach the public site.
+  exporter:
+    build:
+      context: .
+      dockerfile: Dockerfile.go
+      args:
+        SERVICE: exporter
+    restart: unless-stopped
+    # S-4 hardening: no privilege escalation, drop all capabilities.
+    security_opt:
+      - "no-new-privileges:true"
+    cap_drop:
+      - ALL
+    # Data tier only: reads the DB and is scraped by prometheus, both on the
+    # internal `backend` network. Needs no external egress.
+    networks: [backend]
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      # Least-privilege (HP-9, §11.4): the exporter is pure read-only, so point
+      # it at the read-only pf_exporter role once provisioned (see
+      # db/roles/least-privilege-roles.sql). Defaults to the superuser URL so an
+      # un-migrated deployment is unchanged; set EXPORTER_DATABASE_URL in .env to
+      # postgresql://pf_exporter:<pw>@db:5432/<db> to enable the lock-down.
+      DATABASE_URL: ${EXPORTER_DATABASE_URL:-postgresql://${POSTGRES_USER:?set POSTGRES_USER}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:?set POSTGRES_DB}}
+      # Bound each scrape query so a slow/locked query fails the scrape fast (0 disables).
+      DATABASE_STATEMENT_TIMEOUT_MS: ${DATABASE_STATEMENT_TIMEOUT_MS:-30000}
+      # If you change this, also update the target in
+      # monitoring/prometheus/prometheus.yml.
+      EXPORTER_PORT: ${EXPORTER_PORT:-9180}
+
+  # Scrapes the exporter and stores the time series. Not published to the host —
+  # nginx serves it under /prometheus on the main site (see default.conf.template),
+  # gated by HTTP Basic Auth (PROMETHEUS_BASIC_AUTH_USER/_PASSWORD above) since
+  # Prometheus has no auth of its own (H-1). Runs with
+  # --web.route-prefix=/prometheus so every route lives under that path,
+  # including on the internal network. Point Grafana at
+  # http://prometheus:9090/prometheus (same Docker network, no auth needed) or
+  # http://<basic-auth-user>:<password>@<host>:${HTTP_PORT:-8080}/prometheus
+  # (external — only works once PROMETHEUS_BASIC_AUTH_PASSWORD is set).
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    restart: unless-stopped
+    # S-4 hardening: no privilege escalation (the prom image already runs as the
+    # unprivileged `nobody` user; cap_drop omitted to avoid surprising the
+    # upstream entrypoint on the mounted config/TSDB volume).
+    security_opt:
+      - "no-new-privileges:true"
+    # `backend` to scrape exporter + web:5173; `frontend` so nginx can proxy the
+    # /prometheus UI to it.
+    networks: [frontend, backend]
+    depends_on:
+      - exporter
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+      - '--web.external-url=/prometheus'
+      - '--web.route-prefix=/prometheus'
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus_data:/prometheus
+
+volumes:
+  postgres_data:
+  prometheus_data:
+  redis_data:
+
+# S-4 network segmentation. Two tiers instead of one flat bridge:
+#   frontend — the edge/egress tier: nginx and everything it proxies (web,
+#              slicer-proxy, mcp, prometheus). Provides the default route for
+#              outbound egress (printer LAN, IdPs, GitHub, Discord).
+#   backend  — the data tier, marked `internal: true` so it has NO external
+#              connectivity at all. db, redis, and exporter live ONLY here, so
+#              they are unreachable from the host/internet AND from the edge-only
+#              nginx and mcp containers. web/poller/slicer-proxy/prometheus join
+#              both tiers, which is what lets them reach the DB while the DB
+#              itself never touches the edge.
+# A compromised edge service (or the AI/MCP surface) therefore cannot open a
+# direct socket to Postgres or Redis — it must go through web's authorized,
+# audited API. This is the single biggest blast-radius reduction in the stack.
+networks:
+  frontend:
+    driver: bridge
+  backend:
+    driver: bridge
+    internal: true

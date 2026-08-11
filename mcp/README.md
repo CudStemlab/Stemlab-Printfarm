@@ -118,7 +118,10 @@ MCP_TRANSPORT=stdio PRINTFARM_API_KEY=<key> PRINTFARM_API_BASE=https://<domain> 
   npx @modelcontextprotocol/inspector node mcp/index.js
 
 # http (against a running compose stack)
-docker compose up --build mcp nginx
+# single container (default): the MCP server runs in-process on /mcp — set
+# MCP_HTTP_PUBLIC=true in .env to expose it, then `docker compose up --build`
+# split stack:
+docker compose -f docker-compose.multi.yml up --build mcp nginx
 #   then connect Inspector (Streamable HTTP) to http://localhost:8080/mcp
 #   with header Authorization: Bearer <key>
 ```
