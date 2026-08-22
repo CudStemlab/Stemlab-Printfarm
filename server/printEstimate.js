@@ -95,6 +95,12 @@ function newAccumulator() {
     volume2x: 0, // sum of v0 · (v1 × v2); divided by 6 at the end
     area2x: 0, // sum of |(v1-v0) × (v2-v0)|; halved at the end
     triangles: 0,
+    // How many placed copies of a mesh this total covers. Only the linear part
+    // of a 3MF transform is tracked (translation does not affect volume), so
+    // two copies of one object share a bounding box while contributing twice
+    // the volume — the open-mesh guard in estimateFromModel has to scale the
+    // box by this or it misreads a two-up plate as a broken mesh.
+    instances: 0,
     minX: Infinity,
     minY: Infinity,
     minZ: Infinity,
@@ -166,6 +172,7 @@ function mergeAccumulator(target, other) {
   target.volume2x += other.volume2x;
   target.area2x += other.area2x;
   target.triangles += other.triangles;
+  target.instances += Math.max(1, other.instances);
   target.minX = Math.min(target.minX, other.minX);
   target.minY = Math.min(target.minY, other.minY);
   target.minZ = Math.min(target.minZ, other.minZ);
@@ -181,6 +188,7 @@ function finishAccumulator(acc) {
     volumeMm3: Math.abs(acc.volume2x) / 6,
     areaMm2: acc.area2x / 2,
     triangles: acc.triangles,
+    instances: Math.max(1, acc.instances),
     width: acc.maxX - acc.minX,
     depth: acc.maxY - acc.minY,
     height: acc.maxZ - acc.minZ,
@@ -354,19 +362,23 @@ const UNIT_TO_MM = {
   meter: 1000,
 };
 
-const OBJECT_RE = /<object\b([^>]*)>([\s\S]*?)<\/object>/gi;
-const VERTEX_RE = /<vertex\s+([^>]*?)\/?>/gi;
-const TRIANGLE_RE = /<triangle\s+([^>]*?)\/?>/gi;
-const ITEM_RE = /<item\s+([^>]*?)\/?>/gi;
+// Regexes are built per call rather than shared at module scope: the component
+// walk below is recursive, and a /g regex carries lastIndex, so a shared one
+// would have its cursor clobbered by the nested call mid-iteration.
+const objectRe = () => /<object\b([^>]*)>([\s\S]*?)<\/object>/gi;
+const vertexRe = () => /<vertex\s+([^>]*?)\/?>/gi;
+const triangleRe = () => /<triangle\s+([^>]*?)\/?>/gi;
+const itemRe = () => /<item\s+([^>]*?)\/?>/gi;
+const componentRe = () => /<component\s+([^>]*?)\/?>/gi;
 
 function attr(attrs, name) {
   const match = new RegExp(`(?:^|\\s)${name}="([^"]*)"`, 'i').exec(attrs);
   return match ? match[1] : null;
 }
 
-// Determinant of the 3×3 linear part of a 3MF item transform (a row-major list
-// of 12 numbers: three basis vectors then a translation). Translation does not
-// affect volume, so it is ignored.
+// Determinant of the 3×3 linear part of a 3MF transform (a row-major list of 12
+// numbers: three basis vectors then a translation). Translation does not affect
+// volume, so it is ignored.
 function transformDeterminant(transform) {
   if (!transform) return 1;
   const n = transform.trim().split(/\s+/).map(Number);
@@ -378,93 +390,189 @@ function transformDeterminant(transform) {
   return Number.isFinite(det) && det !== 0 ? det : 1;
 }
 
-// Mesh-only 3MF (a model exported from CAD rather than sliced). Parsed from
-// 3D/3dmodel.model with regex rather than a real XML parser: the web runtime
-// image has no XML dependency for this, and the two element shapes involved are
-// flat attribute-only tags.
-async function parse3mfMesh(buf, config) {
-  const data = readZipEntry(buf, '3D/3dmodel.model');
-  if (!data) return null;
-  const xml = data.toString('utf8');
+const MODEL_ROOT_PART = '3D/3dmodel.model';
+// Depth cap on the component graph. Real files nest one level (root object →
+// component → object-in-another-part); this only has to stop a malicious or
+// broken file from recursing forever, alongside the cycle guard below.
+const MAX_COMPONENT_DEPTH = 8;
 
-  const unit = (attr(xml.slice(0, 2048), 'unit') || 'millimeter').toLowerCase();
+// A p:path is absolute within the archive ("/3D/Objects/object_1.model"); zip
+// entry names have no leading slash. An absent path means "same part".
+function normalizePartPath(path, fallback) {
+  if (!path) return fallback;
+  return path.replace(/^\/+/, '');
+}
+
+// Split one .model part into objectId → the XML inside that <object>.
+function parseModelObjects(xml) {
+  const objects = new Map();
+  const re = objectRe();
+  let match = re.exec(xml);
+  while (match !== null) {
+    const id = attr(match[1], 'id');
+    if (id && !objects.has(id)) objects.set(id, match[2]);
+    match = re.exec(xml);
+  }
+  return objects;
+}
+
+// Read and index one .model part out of the archive, memoised — a part holding
+// a repeated object is referenced once per copy.
+function loadModelPart(ctx, path) {
+  if (ctx.parts.has(path)) return ctx.parts.get(path);
+  const data = readZipEntry(ctx.buf, path);
+  const part = data ? { xml: data.toString('utf8'), objects: null } : null;
+  if (part) part.objects = parseModelObjects(part.xml);
+  ctx.parts.set(path, part);
+  return part;
+}
+
+// Accumulate the <mesh> written directly inside one <object> body.
+async function accumulateMesh(body, config) {
+  const acc = newAccumulator();
+  const vx = [];
+  const vy = [];
+  const vz = [];
+
+  const vre = vertexRe();
+  let match = vre.exec(body);
+  while (match !== null) {
+    vx.push(Number.parseFloat(attr(match[1], 'x')));
+    vy.push(Number.parseFloat(attr(match[1], 'y')));
+    vz.push(Number.parseFloat(attr(match[1], 'z')));
+    match = vre.exec(body);
+  }
+  if (vx.length === 0) return null;
+
+  const tre = triangleRe();
+  match = tre.exec(body);
+  while (match !== null) {
+    const a = Number.parseInt(attr(match[1], 'v1') ?? '', 10);
+    const b = Number.parseInt(attr(match[1], 'v2') ?? '', 10);
+    const c = Number.parseInt(attr(match[1], 'v3') ?? '', 10);
+    if (
+      Number.isInteger(a) &&
+      Number.isInteger(b) &&
+      Number.isInteger(c) &&
+      a >= 0 &&
+      b >= 0 &&
+      c >= 0 &&
+      a < vx.length &&
+      b < vx.length &&
+      c < vx.length &&
+      Number.isFinite(vx[a]) &&
+      Number.isFinite(vx[b]) &&
+      Number.isFinite(vx[c])
+    ) {
+      addTriangle(acc, vx[a], vy[a], vz[a], vx[b], vy[b], vz[b], vx[c], vy[c], vz[c]);
+      if (acc.triangles > config.maxTriangles) return null;
+      if (acc.triangles % YIELD_EVERY === 0) await yieldToLoop();
+    }
+    match = tre.exec(body);
+  }
+
+  if (acc.triangles === 0) return null;
+  acc.instances = 1;
+  return acc;
+}
+
+// Resolve one object to a finished accumulator, following <component> references.
+//
+// This is what the 3MF **production extension** requires, and it is the common
+// case in the wild rather than an edge case: Bambu Studio, Orca and MakerWorld
+// all write a root 3D/3dmodel.model containing NO geometry at all — only
+// <object>s made of <component p:path="/3D/Objects/object_N.model" objectid="…"
+// transform="…"/> pointing at sibling parts inside the same zip. A parser that
+// reads the root part alone finds zero vertices and gives up.
+async function accumulateObject(ctx, partPath, objectId, depth) {
+  if (depth > MAX_COMPONENT_DEPTH) return null;
+  const key = `${partPath}#${objectId}`;
+  if (ctx.cache.has(key)) return ctx.cache.get(key);
+  // Seed the cache before recursing so a cyclic reference resolves to nothing
+  // rather than looping.
+  ctx.cache.set(key, null);
+
+  const part = loadModelPart(ctx, partPath);
+  const body = part && part.objects ? part.objects.get(objectId) : null;
+  if (!body) return null;
+
+  let acc = await accumulateMesh(body, ctx.config);
+
+  if (!acc) {
+    const total = newAccumulator();
+    let placed = 0;
+    const cre = componentRe();
+    let match = cre.exec(body);
+    while (match !== null) {
+      const childId = attr(match[1], 'objectid');
+      if (childId) {
+        const childPath = normalizePartPath(
+          attr(match[1], 'p:path') ?? attr(match[1], 'path'),
+          partPath,
+        );
+        const child = await accumulateObject(ctx, childPath, childId, depth + 1);
+        if (child) {
+          mergeAccumulator(
+            total,
+            scaleAccumulator({ ...child }, transformDeterminant(attr(match[1], 'transform'))),
+          );
+          placed += 1;
+        }
+      }
+      match = cre.exec(body);
+    }
+    if (placed > 0) acc = total;
+  }
+
+  ctx.cache.set(key, acc);
+  return acc;
+}
+
+// A 3MF carrying real geometry (exported from CAD, or a MakerWorld/Bambu
+// project that has not been sliced). Walks <build> and resolves each item
+// through the component graph above.
+async function parse3mfMesh(buf, config) {
+  const ctx = { buf, config, parts: new Map(), cache: new Map() };
+  const root = loadModelPart(ctx, MODEL_ROOT_PART);
+  if (!root) return null;
+
+  const unit = (attr(root.xml.slice(0, 2048), 'unit') || 'millimeter').toLowerCase();
   const unitScale = UNIT_TO_MM[unit] ?? 1;
 
-  // Accumulate each <object> separately so a build <item>'s transform can scale
-  // only that object's contribution.
-  const byId = new Map();
-  OBJECT_RE.lastIndex = 0;
-  let objectMatch = OBJECT_RE.exec(xml);
-  while (objectMatch !== null) {
-    const id = attr(objectMatch[1], 'id');
-    const body = objectMatch[2];
-    const acc = newAccumulator();
-    const vx = [];
-    const vy = [];
-    const vz = [];
-
-    VERTEX_RE.lastIndex = 0;
-    let vertexMatch = VERTEX_RE.exec(body);
-    while (vertexMatch !== null) {
-      vx.push(Number.parseFloat(attr(vertexMatch[1], 'x')));
-      vy.push(Number.parseFloat(attr(vertexMatch[1], 'y')));
-      vz.push(Number.parseFloat(attr(vertexMatch[1], 'z')));
-      vertexMatch = VERTEX_RE.exec(body);
-    }
-
-    TRIANGLE_RE.lastIndex = 0;
-    let triangleMatch = TRIANGLE_RE.exec(body);
-    while (triangleMatch !== null) {
-      const a = Number.parseInt(attr(triangleMatch[1], 'v1') ?? '', 10);
-      const b = Number.parseInt(attr(triangleMatch[1], 'v2') ?? '', 10);
-      const c = Number.parseInt(attr(triangleMatch[1], 'v3') ?? '', 10);
-      if (
-        Number.isInteger(a) &&
-        Number.isInteger(b) &&
-        Number.isInteger(c) &&
-        a >= 0 &&
-        b >= 0 &&
-        c >= 0 &&
-        a < vx.length &&
-        b < vx.length &&
-        c < vx.length &&
-        Number.isFinite(vx[a]) &&
-        Number.isFinite(vx[b]) &&
-        Number.isFinite(vx[c])
-      ) {
-        addTriangle(acc, vx[a], vy[a], vz[a], vx[b], vy[b], vz[b], vx[c], vy[c], vz[c]);
-        if (acc.triangles > config.maxTriangles) return null;
-        if (acc.triangles % YIELD_EVERY === 0) await yieldToLoop();
-      }
-      triangleMatch = TRIANGLE_RE.exec(body);
-    }
-
-    if (acc.triangles > 0 && id) byId.set(id, acc);
-    objectMatch = OBJECT_RE.exec(xml);
-  }
-
-  if (byId.size === 0) return null;
-
-  // Build items reference objects, possibly several times and with transforms.
-  // A file with no <build> section (or with unresolvable references) falls back
-  // to counting every object once.
   const total = newAccumulator();
   let placed = 0;
-  ITEM_RE.lastIndex = 0;
-  let itemMatch = ITEM_RE.exec(xml);
-  while (itemMatch !== null) {
-    const ref = attr(itemMatch[1], 'objectid');
-    const source = ref ? byId.get(ref) : null;
-    if (source) {
-      const det = transformDeterminant(attr(itemMatch[1], 'transform'));
-      mergeAccumulator(total, scaleAccumulator({ ...source }, det));
-      placed += 1;
+  const ire = itemRe();
+  let match = ire.exec(root.xml);
+  while (match !== null) {
+    const id = attr(match[1], 'objectid');
+    if (id) {
+      const path = normalizePartPath(
+        attr(match[1], 'p:path') ?? attr(match[1], 'path'),
+        MODEL_ROOT_PART,
+      );
+      const acc = await accumulateObject(ctx, path, id, 0);
+      if (acc) {
+        mergeAccumulator(
+          total,
+          scaleAccumulator({ ...acc }, transformDeterminant(attr(match[1], 'transform'))),
+        );
+        placed += 1;
+      }
     }
-    itemMatch = ITEM_RE.exec(xml);
+    match = ire.exec(root.xml);
   }
+
+  // No usable <build> section: count every root object once.
   if (placed === 0) {
-    for (const acc of byId.values()) mergeAccumulator(total, acc);
+    for (const id of root.objects.keys()) {
+      const acc = await accumulateObject(ctx, MODEL_ROOT_PART, id, 0);
+      if (acc) {
+        mergeAccumulator(total, { ...acc });
+        placed += 1;
+      }
+    }
   }
+  if (placed === 0) return null;
 
   return finishAccumulator(scaleAccumulator(total, unitScale ** 3));
 }
@@ -550,7 +658,10 @@ export async function estimateFromModel(buffer, filename, options = {}) {
   // A signed volume outside (0, bbox] means the surface is not closed — an open
   // or self-intersecting mesh. The number is then meaningless, so fall back to a
   // fraction of the bounding box and say so via the source.
-  const bboxV = geometry.width * geometry.depth * geometry.height;
+  // Scaled by the instance count: the box is the footprint of ONE copy, so a
+  // plate holding three of the same object legitimately carries three times the
+  // volume of that box.
+  const bboxV = geometry.width * geometry.depth * geometry.height * geometry.instances;
   let source = 'geometry';
   if (!(geometry.volumeMm3 > 0) || (bboxV > 0 && geometry.volumeMm3 > bboxV * 1.001)) {
     if (!(bboxV > 0)) return null;
@@ -561,7 +672,8 @@ export async function estimateFromModel(buffer, filename, options = {}) {
       2 *
       (geometry.width * geometry.depth +
         geometry.width * geometry.height +
-        geometry.depth * geometry.height);
+        geometry.depth * geometry.height) *
+      geometry.instances;
     geometry = { ...geometry, volumeMm3: bboxV * 0.3, areaMm2: bboxArea };
     source = 'bbox';
   }

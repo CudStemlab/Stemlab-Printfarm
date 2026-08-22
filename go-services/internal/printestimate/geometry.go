@@ -10,6 +10,12 @@ type accumulator struct {
 	volume6x  float64 // sum of v0 · (v1 × v2); divided by 6 at the end
 	area2x    float64 // sum of |(v1-v0) × (v2-v0)|; halved at the end
 	triangles int
+	// How many placed copies of a mesh this total covers. Only the linear part
+	// of a 3MF transform is tracked (translation does not affect volume), so two
+	// copies of one object share a bounding box while contributing twice the
+	// volume — the open-mesh guard in FromModel has to scale the box by this or
+	// it misreads a two-up plate as a broken mesh.
+	instances int
 	min       [3]float64
 	max       [3]float64
 }
@@ -69,6 +75,11 @@ func (a *accumulator) merge(other *accumulator) {
 	a.volume6x += other.volume6x
 	a.area2x += other.area2x
 	a.triangles += other.triangles
+	if other.instances > 1 {
+		a.instances += other.instances
+	} else {
+		a.instances++
+	}
 	for axis := 0; axis < 3; axis++ {
 		a.min[axis] = math.Min(a.min[axis], other.min[axis])
 		a.max[axis] = math.Max(a.max[axis], other.max[axis])
@@ -85,6 +96,7 @@ type geometry struct {
 	VolumeMm3 float64
 	AreaMm2   float64
 	Triangles int
+	Instances int
 	Width     float64
 	Depth     float64
 	Height    float64
@@ -94,10 +106,15 @@ func (a *accumulator) finish() *geometry {
 	if a.triangles == 0 || math.IsInf(a.min[2], 0) {
 		return nil
 	}
+	instances := a.instances
+	if instances < 1 {
+		instances = 1
+	}
 	return &geometry{
 		VolumeMm3: math.Abs(a.volume6x) / 6,
 		AreaMm2:   a.area2x / 2,
 		Triangles: a.triangles,
+		Instances: instances,
 		Width:     a.max[0] - a.min[0],
 		Depth:     a.max[1] - a.min[1],
 		Height:    a.max[2] - a.min[2],

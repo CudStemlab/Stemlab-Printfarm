@@ -212,6 +212,77 @@ ${faces.map(([a, b, c]) => `          <triangle v1="${a}" v2="${b}" v3="${c}"/>`
   return buildZip([['3D/3dmodel.model', Buffer.from(xml, 'utf8')]]);
 }
 
+// A 3MF in the **production extension** layout that Bambu Studio, Orca and
+// MakerWorld actually write: the root part carries NO geometry, only an object
+// made of a <component p:path=...> pointing at a sibling part in the same zip.
+// This is the common real-world shape, not an edge case — see the comment on
+// accumulateObject.
+function productionThreeMf(s, { transform = null, copies = 1 } = {}) {
+  const v = [
+    [0, 0, 0],
+    [s, 0, 0],
+    [s, s, 0],
+    [0, s, 0],
+    [0, 0, s],
+    [s, 0, s],
+    [s, s, s],
+    [0, s, s],
+  ];
+  const faces = [
+    [0, 2, 1],
+    [0, 3, 2],
+    [4, 5, 6],
+    [4, 6, 7],
+    [0, 1, 5],
+    [0, 5, 4],
+    [1, 2, 6],
+    [1, 6, 5],
+    [2, 3, 7],
+    [2, 7, 6],
+    [3, 0, 4],
+    [3, 4, 7],
+  ];
+
+  // The sibling part holding the real mesh, under its own local object id.
+  const objectPart = `<?xml version="1.0" encoding="UTF-8"?>
+<model unit="millimeter" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">
+  <resources>
+    <object id="1" type="model">
+      <mesh>
+        <vertices>
+${v.map(([x, y, z]) => `          <vertex x="${x}" y="${y}" z="${z}"/>`).join('\n')}
+        </vertices>
+        <triangles>
+${faces.map(([a, b, c]) => `          <triangle v1="${a}" v2="${b}" v3="${c}"/>`).join('\n')}
+        </triangles>
+      </mesh>
+    </object>
+  </resources>
+</model>`;
+
+  const componentTransform = transform ? ` transform="${transform}"` : '';
+  const rootPart = `<?xml version='1.0' encoding='UTF-8'?>
+<model xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02"
+       xmlns:p="http://schemas.microsoft.com/3dmanufacturing/production/2015/06"
+       unit="millimeter" requiredextensions="p">
+  <resources>
+    <object id="2" type="model">
+      <components>
+        <component p:path="/3D/Objects/object_1.model" objectid="1"${componentTransform}/>
+      </components>
+    </object>
+  </resources>
+  <build>
+${Array.from({ length: copies }, () => '    <item objectid="2"/>').join('\n')}
+  </build>
+</model>`;
+
+  return buildZip([
+    ['3D/3dmodel.model', Buffer.from(rootPart, 'utf8')],
+    ['3D/Objects/object_1.model', Buffer.from(objectPart, 'utf8')],
+  ]);
+}
+
 // Expected grams/minutes for a solid cube of side s, straight from the model in
 // geometryToEstimate — recomputed here independently so a change to the formula
 // has to be made deliberately in both places.
@@ -266,6 +337,48 @@ await test('mesh-only 3MF cube matches the STL one exactly', async () => {
   const stl = await estimateFromModel(binaryStlCube(SIDE), 'cube.stl', opts);
   assert.equal(tmf.source, 'geometry');
   assert.deepEqual(tmf, stl, '3MF mesh and STL must agree');
+});
+
+await test('production-extension 3MF resolves components into sibling parts', async () => {
+  // Regression: real Bambu/Orca/MakerWorld exports put no geometry in
+  // 3D/3dmodel.model at all. Reading only the root part yields zero vertices,
+  // which is what made every real .3mf in the queue estimate as "none".
+  const production = await estimateFromModel(productionThreeMf(SIDE), 'real.3mf', opts);
+  const direct = await estimateFromModel(binaryStlCube(SIDE), 'cube.stl', opts);
+  assert.ok(production, 'a production-extension 3MF must produce an estimate');
+  assert.equal(production.source, 'geometry');
+  assert.deepEqual(production, direct, 'component-resolved mesh must match the same cube as STL');
+});
+
+await test('component transform and repeated build items both scale', async () => {
+  const scaled = await estimateFromModel(
+    productionThreeMf(SIDE, { transform: '2 0 0 0 2 0 0 0 2 0 0 0' }),
+    'real.3mf',
+    opts,
+  );
+  const doubled = await estimateFromModel(binaryStlCube(SIDE * 2), 'cube.stl', opts);
+  assert.equal(scaled.grams, doubled.grams, 'component transform must scale the estimate');
+
+  const twice = await estimateFromModel(productionThreeMf(SIDE, { copies: 2 }), 'real.3mf', opts);
+  const once = await estimateFromModel(productionThreeMf(SIDE), 'real.3mf', opts);
+  assert.ok(
+    Math.abs(twice.grams - once.grams * 2) < 0.11,
+    'two build items of the same object must count twice',
+  );
+});
+
+await test('a cyclic component reference terminates instead of hanging', async () => {
+  const selfRef = `<?xml version="1.0"?>
+<model unit="millimeter" xmlns:p="http://schemas.microsoft.com/3dmanufacturing/production/2015/06">
+  <resources>
+    <object id="1" type="model"><components>
+      <component objectid="1"/>
+    </components></object>
+  </resources>
+  <build><item objectid="1"/></build>
+</model>`;
+  const buf = buildZip([['3D/3dmodel.model', Buffer.from(selfRef, 'utf8')]]);
+  assert.equal(await estimateFromModel(buf, 'cycle.3mf', opts), null);
 });
 
 await test('3MF unit="centimeter" scales volume by 1000', async () => {

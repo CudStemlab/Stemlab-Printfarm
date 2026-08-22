@@ -169,6 +169,119 @@ func meshThreeMF(t *testing.T, s float64, unit, transform string) []byte {
 	return buildZip(t, map[string]string{"3D/3dmodel.model": xml})
 }
 
+// productionThreeMF builds a 3MF in the **production extension** layout that
+// Bambu Studio, Orca and MakerWorld actually write: the root part carries NO
+// geometry, only an object made of a <component p:path=...> pointing at a
+// sibling part in the same zip. This is the common real-world shape, not an edge
+// case — see the comment on accumulateObject.
+func productionThreeMF(t *testing.T, s float64, transform string, copies int) []byte {
+	t.Helper()
+	v := [8][3]float64{
+		{0, 0, 0}, {s, 0, 0}, {s, s, 0}, {0, s, 0},
+		{0, 0, s}, {s, 0, s}, {s, s, s}, {0, s, s},
+	}
+	faces := [12][3]int{
+		{0, 2, 1}, {0, 3, 2}, {4, 5, 6}, {4, 6, 7},
+		{0, 1, 5}, {0, 5, 4}, {1, 2, 6}, {1, 6, 5},
+		{2, 3, 7}, {2, 7, 6}, {3, 0, 4}, {3, 4, 7},
+	}
+	var verts, tris strings.Builder
+	for _, p := range v {
+		fmt.Fprintf(&verts, `<vertex x="%v" y="%v" z="%v"/>`, p[0], p[1], p[2])
+	}
+	for _, f := range faces {
+		fmt.Fprintf(&tris, `<triangle v1="%d" v2="%d" v3="%d"/>`, f[0], f[1], f[2])
+	}
+
+	objectPart := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+<model unit="millimeter" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">
+  <resources><object id="1" type="model"><mesh>
+    <vertices>%s</vertices><triangles>%s</triangles>
+  </mesh></object></resources>
+</model>`, verts.String(), tris.String())
+
+	transformAttr := ""
+	if transform != "" {
+		transformAttr = fmt.Sprintf(` transform="%s"`, transform)
+	}
+	var items strings.Builder
+	for i := 0; i < copies; i++ {
+		items.WriteString(`<item objectid="2"/>`)
+	}
+	rootPart := fmt.Sprintf(`<?xml version='1.0' encoding='UTF-8'?>
+<model xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02"
+       xmlns:p="http://schemas.microsoft.com/3dmanufacturing/production/2015/06"
+       unit="millimeter" requiredextensions="p">
+  <resources><object id="2" type="model"><components>
+    <component p:path="/3D/Objects/object_1.model" objectid="1"%s/>
+  </components></object></resources>
+  <build>%s</build>
+</model>`, transformAttr, items.String())
+
+	return buildZip(t, map[string]string{
+		"3D/3dmodel.model":          rootPart,
+		"3D/Objects/object_1.model": objectPart,
+	})
+}
+
+func TestProductionExtensionResolvesComponents(t *testing.T) {
+	// Regression: real Bambu/Orca/MakerWorld exports put no geometry in
+	// 3D/3dmodel.model at all. Reading only the root part yields zero vertices,
+	// which is what made every real .3mf in the queue estimate as "none".
+	cfg := DefaultConfig()
+	production := FromModel(productionThreeMF(t, side, "", 1), "real.3mf", 1, cfg)
+	direct := FromModel(binarySTLCube(side), "cube.stl", 1, cfg)
+	if production == nil {
+		t.Fatal("a production-extension 3MF must produce an estimate")
+	}
+	if production.Source != SourceGeometry {
+		t.Errorf("source = %q, want %q", production.Source, SourceGeometry)
+	}
+	if production.Grams != direct.Grams || production.Minutes != direct.Minutes {
+		t.Errorf("component-resolved mesh %+v != same cube as STL %+v", *production, *direct)
+	}
+}
+
+func TestComponentTransformAndRepeatedItemsScale(t *testing.T) {
+	cfg := DefaultConfig()
+	scaled := FromModel(productionThreeMF(t, side, "2 0 0 0 2 0 0 0 2 0 0 0", 1), "real.3mf", 1, cfg)
+	doubled := FromModel(binarySTLCube(side*2), "cube.stl", 1, cfg)
+	if scaled == nil || doubled == nil {
+		t.Fatal("expected estimates")
+	}
+	if math.Abs(scaled.Grams-doubled.Grams) > 0.11 {
+		t.Errorf("component transform must scale: %.1f vs %.1f", scaled.Grams, doubled.Grams)
+	}
+
+	// Two build items of one object share a bounding box but contribute twice
+	// the volume; without the instance count this trips the open-mesh guard.
+	once := FromModel(productionThreeMF(t, side, "", 1), "real.3mf", 1, cfg)
+	twice := FromModel(productionThreeMF(t, side, "", 2), "real.3mf", 1, cfg)
+	if once == nil || twice == nil {
+		t.Fatal("expected estimates")
+	}
+	if twice.Source != SourceGeometry {
+		t.Errorf("two-up plate misread as %q, want %q", twice.Source, SourceGeometry)
+	}
+	if math.Abs(twice.Grams-once.Grams*2) > 0.11 {
+		t.Errorf("two items must count twice: %.1f vs %.1f", twice.Grams, once.Grams*2)
+	}
+}
+
+func TestCyclicComponentTerminates(t *testing.T) {
+	selfRef := `<?xml version="1.0"?>
+<model unit="millimeter" xmlns:p="http://schemas.microsoft.com/3dmanufacturing/production/2015/06">
+  <resources><object id="1" type="model"><components>
+    <component objectid="1"/>
+  </components></object></resources>
+  <build><item objectid="1"/></build>
+</model>`
+	buf := buildZip(t, map[string]string{"3D/3dmodel.model": selfRef})
+	if got := FromModel(buf, "cycle.3mf", 1, DefaultConfig()); got != nil {
+		t.Errorf("cyclic reference: got %+v, want nil", *got)
+	}
+}
+
 // expectedCube recomputes the model independently of geometryToEstimate, so a
 // change to the formula has to be made deliberately in both places.
 func expectedCube(s float64, pieces int, cfg Config) (float64, int) {

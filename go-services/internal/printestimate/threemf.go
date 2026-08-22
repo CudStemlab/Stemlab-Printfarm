@@ -129,13 +129,24 @@ type modelMeshXML struct {
 	Triangles []modelTriangleXML `xml:"triangles>triangle"`
 }
 
+// modelComponentXML is the 3MF production extension's cross-part reference.
+// Path is the `p:path` attribute; encoding/xml matches it by local name, so the
+// namespace prefix does not need declaring here.
+type modelComponentXML struct {
+	ObjectID  string `xml:"objectid,attr"`
+	Path      string `xml:"path,attr"`
+	Transform string `xml:"transform,attr"`
+}
+
 type modelObjectXML struct {
-	ID   string       `xml:"id,attr"`
-	Mesh modelMeshXML `xml:"mesh"`
+	ID         string              `xml:"id,attr"`
+	Mesh       modelMeshXML        `xml:"mesh"`
+	Components []modelComponentXML `xml:"components>component"`
 }
 
 type modelItemXML struct {
 	ObjectID  string `xml:"objectid,attr"`
+	Path      string `xml:"path,attr"`
 	Transform string `xml:"transform,attr"`
 }
 
@@ -170,64 +181,184 @@ func transformDeterminant(transform string) float64 {
 	return det
 }
 
-// parse3mfMesh handles a 3MF exported from CAD rather than sliced, reading
-// 3D/3dmodel.model. Each <object> is accumulated separately so a build <item>'s
-// transform scales only that object's contribution.
-func parse3mfMesh(buf []byte, cfg Config) *geometry {
-	data := readZipEntry(buf, "3D/3dmodel.model")
-	if data == nil {
-		return nil
-	}
-	var model modelXML
-	if err := xml.Unmarshal(data, &model); err != nil {
-		return nil
-	}
+const modelRootPart = "3D/3dmodel.model"
 
-	byID := make(map[string]*accumulator, len(model.Objects))
-	for _, object := range model.Objects {
-		acc := newAccumulator()
-		verts := object.Mesh.Vertices
-		for _, tri := range object.Mesh.Triangles {
-			if tri.V1 < 0 || tri.V2 < 0 || tri.V3 < 0 ||
-				tri.V1 >= len(verts) || tri.V2 >= len(verts) || tri.V3 >= len(verts) {
-				continue
-			}
-			a := verts[tri.V1]
-			b := verts[tri.V2]
-			c := verts[tri.V3]
-			acc.add([3]float64{a.X, a.Y, a.Z}, [3]float64{b.X, b.Y, b.Z}, [3]float64{c.X, c.Y, c.Z})
-			if acc.triangles > cfg.MaxTriangles {
-				return nil
-			}
-		}
-		if acc.triangles > 0 && object.ID != "" {
-			byID[object.ID] = acc
+// Depth cap on the component graph. Real files nest one level (root object →
+// component → object in another part); this only has to stop a malicious or
+// broken file from recursing forever, alongside the cycle guard below.
+const maxComponentDepth = 8
+
+// normalizePartPath turns a p:path ("/3D/Objects/object_1.model", absolute
+// within the archive) into a zip entry name, which has no leading slash. An
+// absent path means "same part".
+func normalizePartPath(path, fallback string) string {
+	if path == "" {
+		return fallback
+	}
+	return strings.TrimLeft(path, "/")
+}
+
+// meshContext carries the archive plus the per-part and per-object memo tables
+// for one parse.
+type meshContext struct {
+	buf   []byte
+	cfg   Config
+	parts map[string]*modelXML
+	cache map[string]*accumulator
+}
+
+// loadPart reads and unmarshals one .model part, memoised — a part holding a
+// repeated object is referenced once per copy.
+func (ctx *meshContext) loadPart(path string) *modelXML {
+	if part, ok := ctx.parts[path]; ok {
+		return part
+	}
+	var part *modelXML
+	if data := readZipEntry(ctx.buf, path); data != nil {
+		var parsed modelXML
+		if err := xml.Unmarshal(data, &parsed); err == nil {
+			part = &parsed
 		}
 	}
-	if len(byID) == 0 {
+	ctx.parts[path] = part
+	return part
+}
+
+func (ctx *meshContext) findObject(path, id string) *modelObjectXML {
+	part := ctx.loadPart(path)
+	if part == nil {
 		return nil
 	}
+	for i := range part.Objects {
+		if part.Objects[i].ID == id {
+			return &part.Objects[i]
+		}
+	}
+	return nil
+}
 
-	// Build items reference objects, possibly several times and with transforms.
-	// A file with no <build> section (or with unresolvable references) falls back
-	// to counting every object once.
-	total := newAccumulator()
-	placed := 0
-	for _, item := range model.Items {
-		source, ok := byID[item.ObjectID]
-		if !ok {
+// accumulateMesh sums the <mesh> written directly inside one <object>.
+func accumulateMesh(object *modelObjectXML, cfg Config) *accumulator {
+	verts := object.Mesh.Vertices
+	if len(verts) == 0 {
+		return nil
+	}
+	acc := newAccumulator()
+	for _, tri := range object.Mesh.Triangles {
+		if tri.V1 < 0 || tri.V2 < 0 || tri.V3 < 0 ||
+			tri.V1 >= len(verts) || tri.V2 >= len(verts) || tri.V3 >= len(verts) {
 			continue
 		}
-		total.merge(source.clone().scale(transformDeterminant(item.Transform)))
-		placed++
+		a, b, c := verts[tri.V1], verts[tri.V2], verts[tri.V3]
+		acc.add([3]float64{a.X, a.Y, a.Z}, [3]float64{b.X, b.Y, b.Z}, [3]float64{c.X, c.Y, c.Z})
+		if acc.triangles > cfg.MaxTriangles {
+			return nil
+		}
 	}
-	if placed == 0 {
-		for _, acc := range byID {
-			total.merge(acc)
+	if acc.triangles == 0 {
+		return nil
+	}
+	acc.instances = 1
+	return acc
+}
+
+// accumulateObject resolves one object to a finished accumulator, following
+// <component> references.
+//
+// This is what the 3MF **production extension** requires, and it is the common
+// case in the wild rather than an edge case: Bambu Studio, Orca and MakerWorld
+// all write a root 3D/3dmodel.model containing NO geometry at all — only
+// <object>s made of <component p:path="/3D/Objects/object_N.model" objectid="…"
+// transform="…"/> pointing at sibling parts inside the same zip. A parser that
+// reads the root part alone finds zero vertices and gives up.
+func (ctx *meshContext) accumulateObject(partPath, objectID string, depth int) *accumulator {
+	if depth > maxComponentDepth {
+		return nil
+	}
+	key := partPath + "#" + objectID
+	if cached, ok := ctx.cache[key]; ok {
+		return cached
+	}
+	// Seed the cache before recursing so a cyclic reference resolves to nothing
+	// rather than looping.
+	ctx.cache[key] = nil
+
+	object := ctx.findObject(partPath, objectID)
+	if object == nil {
+		return nil
+	}
+
+	acc := accumulateMesh(object, ctx.cfg)
+	if acc == nil {
+		total := newAccumulator()
+		placed := 0
+		for _, component := range object.Components {
+			if component.ObjectID == "" {
+				continue
+			}
+			childPath := normalizePartPath(component.Path, partPath)
+			child := ctx.accumulateObject(childPath, component.ObjectID, depth+1)
+			if child == nil {
+				continue
+			}
+			total.merge(child.clone().scale(transformDeterminant(component.Transform)))
+			placed++
+		}
+		if placed > 0 {
+			acc = total
 		}
 	}
 
-	unitScale, ok := unitToMm[strings.ToLower(strings.TrimSpace(model.Unit))]
+	ctx.cache[key] = acc
+	return acc
+}
+
+// parse3mfMesh handles a 3MF carrying real geometry (exported from CAD, or a
+// MakerWorld/Bambu project that has not been sliced). It walks <build> and
+// resolves each item through the component graph above.
+func parse3mfMesh(buf []byte, cfg Config) *geometry {
+	ctx := &meshContext{
+		buf:   buf,
+		cfg:   cfg,
+		parts: map[string]*modelXML{},
+		cache: map[string]*accumulator{},
+	}
+	root := ctx.loadPart(modelRootPart)
+	if root == nil {
+		return nil
+	}
+
+	total := newAccumulator()
+	placed := 0
+	for _, item := range root.Items {
+		if item.ObjectID == "" {
+			continue
+		}
+		path := normalizePartPath(item.Path, modelRootPart)
+		acc := ctx.accumulateObject(path, item.ObjectID, 0)
+		if acc == nil {
+			continue
+		}
+		total.merge(acc.clone().scale(transformDeterminant(item.Transform)))
+		placed++
+	}
+
+	// No usable <build> section: count every root object once.
+	if placed == 0 {
+		for i := range root.Objects {
+			acc := ctx.accumulateObject(modelRootPart, root.Objects[i].ID, 0)
+			if acc == nil {
+				continue
+			}
+			total.merge(acc.clone())
+			placed++
+		}
+	}
+	if placed == 0 {
+		return nil
+	}
+
+	unitScale, ok := unitToMm[strings.ToLower(strings.TrimSpace(root.Unit))]
 	if !ok {
 		unitScale = 1
 	}

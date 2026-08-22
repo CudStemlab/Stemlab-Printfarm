@@ -1164,9 +1164,9 @@
     "semantic_hash": ""
   },
   "CLAUDE.md": {
-    "mtime": 1787402749.502205,
-    "seen": 1787402839.8144197,
-    "ast_hash": "b05dad59803ae55e5550c6e0123b5b3e",
+    "mtime": 1787404045.1010318,
+    "seen": 1787404051.1661706,
+    "ast_hash": "babdd9648d7237b02b9102524842a7c4",
     "semantic_hash": ""
   },
   "README.md": {
@@ -1959,21 +1959,21 @@
     "semantic_hash": ""
   },
   "go-services/internal/printestimate/estimate.go": {
-    "mtime": 1787372585.5880218,
-    "seen": 1787402839.8140285,
-    "ast_hash": "e03b9c5386d76cc6a6ae08205495a217",
+    "mtime": 1787403622.0497572,
+    "seen": 1787404051.1624131,
+    "ast_hash": "fa39a880e6e9b708e60676997476b328",
     "semantic_hash": ""
   },
   "go-services/internal/printestimate/estimate_test.go": {
-    "mtime": 1787372642.499944,
-    "seen": 1787402839.8140306,
-    "ast_hash": "5e0e7df2c17f055e200c11402241beb5",
+    "mtime": 1787403741.0816016,
+    "seen": 1787404051.1624167,
+    "ast_hash": "f1550923943bc770d060a572e5b8db4c",
     "semantic_hash": ""
   },
   "go-services/internal/printestimate/geometry.go": {
-    "mtime": 1787372507.2441185,
-    "seen": 1787402839.8140323,
-    "ast_hash": "6437cfb0de59bd88f4dfd1d46c6ea28a",
+    "mtime": 1787403622.027506,
+    "seen": 1787404051.1624188,
+    "ast_hash": "e150befbf33e2030267e6b4e35f02b4c",
     "semantic_hash": ""
   },
   "go-services/internal/printestimate/mesh.go": {
@@ -1983,21 +1983,21 @@
     "semantic_hash": ""
   },
   "go-services/internal/printestimate/threemf.go": {
-    "mtime": 1787402784.2051475,
-    "seen": 1787402839.8140357,
-    "ast_hash": "ec7734d27c4912d41c788a0510e4b150",
+    "mtime": 1787403655.7951453,
+    "seen": 1787404051.1624491,
+    "ast_hash": "446e34359c56ed7b89e008629b5910a3",
     "semantic_hash": ""
   },
   "server/printEstimate.js": {
-    "mtime": 1787372454.2722495,
-    "seen": 1787402839.8141294,
-    "ast_hash": "5f4809ab51e08781ffb57946b2d7b336",
+    "mtime": 1787403573.680135,
+    "seen": 1787404051.1633112,
+    "ast_hash": "a821b4798f1d640cc18d55dd2460c598",
     "semantic_hash": ""
   },
   "server/printEstimate.test.mjs": {
-    "mtime": 1787372428.445202,
-    "seen": 1787402839.8141313,
-    "ast_hash": "b0c0686a56bdd574300e12e7d9a23ec7",
+    "mtime": 1787403493.4982882,
+    "seen": 1787404051.1633124,
+    "ast_hash": "528da090324ecdda195bb22c23cb9a12",
     "semantic_hash": ""
   },
   "server/queueEstimateBackfill.js": {

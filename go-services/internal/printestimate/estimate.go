@@ -103,7 +103,10 @@ func FromModel(buf []byte, filename string, pieces int, cfg Config) *Result {
 	// or self-intersecting mesh. The number is then meaningless, so fall back to
 	// a fraction of the bounding box and say so via the source.
 	source := SourceGeometry
-	bboxV := g.Width * g.Depth * g.Height
+	// Scaled by the instance count: the box is the footprint of ONE copy, so a
+	// plate holding three of the same object legitimately carries three times the
+	// volume of that box.
+	bboxV := g.Width * g.Depth * g.Height * float64(g.Instances)
 	if !(g.VolumeMm3 > 0) || (bboxV > 0 && g.VolumeMm3 > bboxV*1.001) {
 		if !(bboxV > 0) {
 			return nil
@@ -111,7 +114,7 @@ func FromModel(buf []byte, filename string, pieces int, cfg Config) *Result {
 		// Assume the part fills 30% of its bounding box, and use the box's own
 		// surface area for the shell term — the mesh's area is as untrustworthy
 		// as its volume once the surface is known to be open.
-		bboxArea := 2 * (g.Width*g.Depth + g.Width*g.Height + g.Depth*g.Height)
+		bboxArea := 2 * (g.Width*g.Depth + g.Width*g.Height + g.Depth*g.Height) * float64(g.Instances)
 		adjusted := *g
 		adjusted.VolumeMm3 = bboxV * 0.3
 		adjusted.AreaMm2 = bboxArea
