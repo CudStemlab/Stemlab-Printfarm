@@ -133,6 +133,8 @@ import {
   redisTtl,
 } from './redis.js';
 import { logger } from './logger.js';
+import { estimateFromModel } from './printEstimate.js';
+import { scheduleQueueEstimateBackfill } from './queueEstimateBackfill.js';
 import { requiredCapability, roleHasCapability, PUBLIC as RBAC_PUBLIC } from './rbac.js';
 import {
   classifyRoute,
@@ -1918,6 +1920,10 @@ const PUBLIC_QUEUE_FIELDS = [
   'progress',
   'estimatedTime',
   'timeRemaining',
+  // Derived from the model file, not from the submitter — no PII, and the same
+  // operational value the public queue view already gets from estimatedTime.
+  'estimatedFilament',
+  'estimateSource',
   'filamentUsed',
   'priority',
   // stlFileUrl / hasFile deliberately omitted: the file download is staff-only
@@ -4525,7 +4531,24 @@ async function handleApi(req, res, requestUrl) {
       course ? `Course: ${course}` : '',
       noteText,
     ].filter(Boolean);
-    const estimatedTime = Math.max(30, quantity * 60);
+    // Estimate print time and filament from the uploaded model. Best-effort:
+    // an unparseable or oversized file leaves the old quantity-derived
+    // placeholder in place and records no source, exactly like a job submitted
+    // before this existed. A parse failure must never fail a submission.
+    let estimatedTime = Math.max(30, quantity * 60);
+    let estimatedFilamentGrams = null;
+    let estimateSource = 'none';
+    try {
+      const estimate = await estimateFromModel(file.content, file.filename, { pieces: quantity });
+      if (estimate) {
+        estimatedTime = estimate.minutes;
+        estimatedFilamentGrams = estimate.grams;
+        estimateSource = estimate.source;
+      }
+    } catch (error) {
+      logger.warn('failed to estimate queue submission', error);
+    }
+
     const id = `queue-${createHash('sha1')
       .update(`${submittedAt.toISOString()}|${studentId || submitterName}|${file.filename}`)
       .digest('hex')
@@ -4541,6 +4564,8 @@ async function handleApi(req, res, requestUrl) {
       submittedAt,
       priority: quantity >= 3 ? 'high' : quantity >= 2 ? 'medium' : 'low',
       estimatedTime,
+      estimatedFilamentGrams,
+      estimateSource,
       fileContent: file.content,
       fileMime: file.mimeType || 'application/octet-stream',
       fileSize: file.content.length,
@@ -7248,6 +7273,15 @@ function scheduleUpdateRunWorker() {
 // better; compose `restart: unless-stopped` plus the web healthcheck is the real
 // backstop there.
 scheduleUpdateRunWorker();
+
+// ---------------------------------------------------------------------------
+// Queue print-time / filament estimate backfill
+// ---------------------------------------------------------------------------
+// New submissions are estimated inline at /api/queue/submit. Rows that predate
+// the estimator are filled in here, once, in the background — see
+// server/queueEstimateBackfill.js for why it terminates and why it is
+// best-effort.
+scheduleQueueEstimateBackfill();
 
 // ---------------------------------------------------------------------------
 // Filament Station deferred-assignment replay worker (plan §4, actuation half)

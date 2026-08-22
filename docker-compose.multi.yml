@@ -140,6 +140,22 @@ services:
       # Max size of a model file uploaded through the in-app print-request form
       # (stored in Postgres). The nginx /api/queue/submit body cap should match.
       QUEUE_UPLOAD_MAX_BYTES: ${QUEUE_UPLOAD_MAX_BYTES:-52428800}
+      # ── Queue print-time / filament estimator ──────────────────────────────
+      # An uploaded model is estimated at submit time (server/printEstimate.js).
+      # A sliced .3mf uses the slicer's own figures; a raw mesh goes through this
+      # shell/infill/flow model. All optional — omit for the defaults below.
+      # PRINT_ESTIMATE_TIME_FACTOR is the calibration knob: compare a few
+      # estimates to real prints and scale it, no code change needed.
+      PRINT_ESTIMATE_SHELL_MM: ${PRINT_ESTIMATE_SHELL_MM:-1.0}
+      PRINT_ESTIMATE_INFILL: ${PRINT_ESTIMATE_INFILL:-0.15}
+      PRINT_ESTIMATE_DENSITY: ${PRINT_ESTIMATE_DENSITY:-1.24}
+      PRINT_ESTIMATE_LAYER_MM: ${PRINT_ESTIMATE_LAYER_MM:-0.2}
+      PRINT_ESTIMATE_FLOW_MM3S: ${PRINT_ESTIMATE_FLOW_MM3S:-6}
+      PRINT_ESTIMATE_LAYER_OVERHEAD_S: ${PRINT_ESTIMATE_LAYER_OVERHEAD_S:-2.5}
+      PRINT_ESTIMATE_FIXED_OVERHEAD_S: ${PRINT_ESTIMATE_FIXED_OVERHEAD_S:-180}
+      PRINT_ESTIMATE_TIME_FACTOR: ${PRINT_ESTIMATE_TIME_FACTOR:-1.0}
+      PRINT_ESTIMATE_MAX_TRIANGLES: ${PRINT_ESTIMATE_MAX_TRIANGLES:-3000000}
+      PRINT_ESTIMATE_MAX_BYTES: ${PRINT_ESTIMATE_MAX_BYTES:-67108864}
       # Max size of a backup archive uploaded via Settings → Backup & Restore
       # (a full-data backup, so it can be far larger than a single print-request
       # upload). The nginx /api/admin/backup/restore body cap (BACKUP_MAX_BODY_SIZE

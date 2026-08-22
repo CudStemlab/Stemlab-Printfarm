@@ -133,7 +133,36 @@ function buildSheetXml(rows: string[][]): string {
 
 // ── Queue-specific serialization ──────────────────────────────────────────────
 
-const HEADERS = ['Status', 'Name', 'Email', 'File', 'Qty', 'Priority', 'Notes', 'Submitted At'];
+const HEADERS = [
+  'Status',
+  'Name',
+  'Email',
+  'File',
+  'Qty',
+  'Priority',
+  'Est. Time (min)',
+  'Est. Filament (g)',
+  'Estimate Source',
+  'Notes',
+  'Submitted At',
+];
+
+// Estimate columns are left blank rather than zero-filled when a job has no
+// usable estimate ('none', or a row predating the estimator) — a spreadsheet
+// that sums the column must not count a placeholder as real data.
+function estimateCells(job: PrintJob): [string, string, string] {
+  const source = job.estimateSource;
+  if (source !== 'slicer' && source !== 'geometry' && source !== 'bbox') {
+    return ['', '', ''];
+  }
+  return [
+    job.estimatedTime > 0 ? String(job.estimatedTime) : '',
+    typeof job.estimatedFilament === 'number' && job.estimatedFilament > 0
+      ? String(job.estimatedFilament)
+      : '',
+    source,
+  ];
+}
 
 function jobToRow(job: PrintJob, section: 'Pending' | 'Printed'): string[] {
   return [
@@ -143,6 +172,7 @@ function jobToRow(job: PrintJob, section: 'Pending' | 'Printed'): string[] {
     job.filename ?? '',
     String(job.fileCount ?? 1),
     job.priority,
+    ...estimateCells(job),
     job.notes ?? '',
     job.submittedAt ? new Date(job.submittedAt).toLocaleString() : '',
   ];

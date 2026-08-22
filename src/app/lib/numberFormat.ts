@@ -14,6 +14,17 @@ export function formatMaxTwoDecimals(value: number) {
   }).format(roundToMaxTwoDecimals(value));
 }
 
+// Human-readable duration from a whole number of minutes: "45m", "4h 12m",
+// "3h". Used for print-time estimates, which are never sub-minute.
+export function formatDurationMinutes(minutes: number) {
+  const total = Number.isFinite(minutes) ? Math.max(0, Math.round(minutes)) : 0;
+  const hours = Math.floor(total / 60);
+  const rest = total % 60;
+  if (hours === 0) return `${rest}m`;
+  if (rest === 0) return `${hours}h`;
+  return `${hours}h ${rest}m`;
+}
+
 const BYTE_UNITS = ['B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB'];
 
 // Binary (1024-based) byte formatting, ≤ 2 decimal places, matching how

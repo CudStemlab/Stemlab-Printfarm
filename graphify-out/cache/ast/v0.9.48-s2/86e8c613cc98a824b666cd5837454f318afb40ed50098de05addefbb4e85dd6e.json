@@ -1,0 +1,1 @@
+{"nodes": [{"id": "$graphify-root$_dockerfile_go", "label": "Dockerfile.go", "file_type": "code", "source_file": "Dockerfile.go", "source_location": "L1"}], "edges": [], "raw_calls": [], "go_imports": {}}
