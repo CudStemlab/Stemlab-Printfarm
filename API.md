@@ -260,10 +260,39 @@ sync — that behavior lives on the frontend `/api/queue` path only.
 | Method & path | Description |
 |---------------|-------------|
 | `GET /queue` | List stored queue jobs. |
-| `POST /queue` | Upsert jobs. Body is an array, or `{ "jobs": [...] }`. Returns `{ "added": [...] }`. |
+| `POST /queue` | Upsert jobs. Body is an array, or `{ "jobs": [...] }`. Returns `{ "added": [...] }`. Does **not** accept `estimatedFilament`/`estimateSource` — an upsert that omits them leaves the stored estimate intact rather than clearing it. |
 | `POST /queue/reset` | Clear `printed_status` for all non-deleted jobs. |
 | `POST /queue/:id/printed` | Mark a job printed. |
 | `DELETE /queue/:id` | Soft-delete a job (sets `deleted_at`). |
+
+#### Print-time / filament estimate
+
+Every job in a `GET /queue` (and `GET /api/queue`) response carries an estimate
+derived from the uploaded model when it was submitted:
+
+| Field | Meaning |
+|-------|---------|
+| `estimatedTime` | Estimated print time in **minutes**, for the whole job (all `fileCount` pieces). |
+| `estimatedFilament` | Estimated filament in **grams**, for the whole job. `null` when no weight could be derived. |
+| `estimateSource` | Where the numbers came from — see below. `null` on a row not yet processed by the backfill. |
+
+`estimateSource` values:
+
+- `slicer` — the upload was an already-sliced `.3mf`, so these are the slicer's
+  own `weight` / `prediction` figures from `Metadata/slice_info.config`. Exact.
+- `geometry` — computed from the mesh's solid volume and surface area through a
+  shell/infill/flow model. **Approximate** (±30–50%); tune with the
+  `PRINT_ESTIMATE_*` env vars, chiefly `PRINT_ESTIMATE_TIME_FACTOR`.
+- `bbox` — the mesh is open or non-manifold, so its volume is meaningless and a
+  fraction of the bounding box was used instead. Roughest of the three.
+- `none` — the file could not be estimated (unsupported, corrupt, or over
+  `PRINT_ESTIMATE_MAX_BYTES` / `PRINT_ESTIMATE_MAX_TRIANGLES`). `estimatedTime`
+  is then the legacy quantity-derived placeholder and `estimatedFilament` is
+  `null`; treat both as absent.
+
+A client showing these to a user should mark anything other than `slicer` as
+approximate. `filamentUsed` is unrelated — it is *actual* consumption, and is
+always `0` for a queued job.
 
 #### Migration (host → host)
 
@@ -273,8 +302,8 @@ a large model never has to be base64-encoded inside one JSON document.
 
 | Method & path | Description |
 |---------------|-------------|
-| `GET /queue/export` | Metadata-only manifest of stored jobs → `{ "jobs": [...] }`. Pending jobs only by default; add `?includePrinted=true` to also include printed history. Migrate **only a selection** with `?ids=a,b,c` (comma-separated, repeatable). Each job carries `hasFile`, `fileMime`, `fileSize`. |
-| `POST /queue/import` | Recreate rows from a manifest. Body is an array or `{ "jobs": [...] }`. Preserves `id`, `printedStatus`, and `submittedAt` (idempotent upsert on `id`). Returns `{ "imported": <count> }`. |
+| `GET /queue/export` | Metadata-only manifest of stored jobs → `{ "jobs": [...] }`. Pending jobs only by default; add `?includePrinted=true` to also include printed history. Migrate **only a selection** with `?ids=a,b,c` (comma-separated, repeatable). Each job carries `hasFile`, `fileMime`, `fileSize`, and its `estimatedTime` / `estimatedFilament` / `estimateSource`. |
+| `POST /queue/import` | Recreate rows from a manifest. Body is an array or `{ "jobs": [...] }`. Preserves `id`, `printedStatus`, `submittedAt`, and the estimate fields (idempotent upsert on `id`), so a migrated queue does not have to be re-estimated. Returns `{ "imported": <count> }`. |
 | `GET /queue/:id/file` | Stream a job's stored model bytes (`Content-Disposition: attachment`). `404` if the job has no stored file. |
 | `PUT /queue/:id/file` | Attach model bytes to an already-imported job. Send the file as the **raw request body**; `Content-Type` becomes the stored MIME. `404` if the job doesn't exist yet. Returns `{ "id", "fileSize" }`. |
 | `POST /queue/delete` | Bulk soft-delete the source rows after migration. Body is an array or `{ "ids": [...] }`. Returns `{ "deleted": <count> }`. |
@@ -673,8 +702,9 @@ classified below requires an admin session.
 > fields from the print-request form (`submitterName`, `submitterEmail`, `notes`)
 > only to an operator/admin session. Anonymous, viewer, and student callers get a
 > whitelisted operational view (`id`, `filename`, `fileCount`, `printedStatus`,
-> `status`, `progress`, `estimatedTime`, `timeRemaining`, `filamentUsed`,
-> `priority`, `submittedAt`) with those PII fields omitted, regardless of
+> `status`, `progress`, `estimatedTime`, `timeRemaining`, `estimatedFilament`,
+> `estimateSource`, `filamentUsed`, `priority`, `submittedAt`) with those PII
+> fields omitted, regardless of
 > `VITE_PUBLIC_VIEWER_MODE`. The `stlFileUrl`/`hasFile` fields are also omitted
 > from this public view because the model file itself is now staff-only (see
 > below). The key-gated `GET /api/v1/queue` is unaffected — it returns the full
@@ -1286,6 +1316,15 @@ their `firstName`/`lastName` (falling back to `studentId`) as before.
 Also rate-limited per client IP (default 10 requests/hour, tunable via
 `PUBLIC_INTAKE_MAX_PER_WINDOW` / `PUBLIC_INTAKE_WINDOW_SECONDS`); over the limit
 returns **`429`** with a `Retry-After` header, checked before the window check.
+
+**Print-time / filament estimate.** The uploaded model is estimated before the row
+is inserted, and the result is stored on the job as `estimatedTime` (minutes),
+`estimatedFilament` (grams) and `estimateSource` — see
+[Print-time / filament estimate](#print-time--filament-estimate) under
+`/api/v1/queue` for the field semantics. The request body and response shape are
+unchanged: the estimate is derived server-side from the file, never accepted from
+the client. Estimation is best-effort — an unparseable, unsupported or oversized
+file yields `estimateSource: "none"` and the submission still succeeds.
 
 ## SSO public URL (`/api/settings/sso-public-url`)
 

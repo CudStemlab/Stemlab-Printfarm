@@ -93,7 +93,14 @@ export interface PrintJob {
   filamentUsed: number; // grams
   // Slicer's total filament estimate for the job (grams), when a print was
   // started through the slicer-proxy. Used to show "used / total".
+  // On a queue job this is instead the submission estimate (see estimateSource).
   estimatedFilament?: number;
+  // Where a queue job's estimatedTime / estimatedFilament came from:
+  // 'slicer' = the uploaded file was already sliced, so these are the slicer's
+  // own exact figures; 'geometry'/'bbox' = computed from the model's mesh, so
+  // approximate; 'none' = the file could not be estimated, and estimatedTime is
+  // the old quantity-derived placeholder. Absent on live printer jobs.
+  estimateSource?: 'slicer' | 'geometry' | 'bbox' | 'none';
   startTime?: string;
   endTime?: string;
   priority: 'low' | 'medium' | 'high';

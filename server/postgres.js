@@ -106,6 +106,15 @@ ALTER TABLE queue_jobs ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
 ALTER TABLE queue_jobs ADD COLUMN IF NOT EXISTS file_content BYTEA;
 ALTER TABLE queue_jobs ADD COLUMN IF NOT EXISTS file_mime TEXT;
 ALTER TABLE queue_jobs ADD COLUMN IF NOT EXISTS file_size_bytes INTEGER NOT NULL DEFAULT 0;
+-- Print-time / filament estimate derived from the uploaded model at submit time
+-- (server/printEstimate.js). estimate_source records where the numbers came
+-- from -- 'slicer' (the sliced file's own figures), 'geometry'/'bbox' (our
+-- heuristic), or 'none' (unparseable, so the backfill stops retrying it). NULL
+-- means not yet estimated, which is what the backfill worker looks for. The
+-- time half reuses the existing estimated_time column; marking a job printed
+-- nulls file_content, so both must be stored rather than recomputed on read.
+ALTER TABLE queue_jobs ADD COLUMN IF NOT EXISTS estimated_filament_grams DOUBLE PRECISION;
+ALTER TABLE queue_jobs ADD COLUMN IF NOT EXISTS estimate_source TEXT;
 -- Supports the queue/history reads, which filter on (form_type, printed_status)
 -- among non-deleted rows. Partial index keeps it small and skips soft-deleted jobs.
 CREATE INDEX IF NOT EXISTS queue_jobs_active_idx
@@ -1281,6 +1290,11 @@ export async function upsertQueueJobs(jobs) {
       submitted_at,
       priority,
       estimated_time,
+      -- Not in the INSERT column list above: an /api/v1 upsert must not clobber
+      -- an estimate it never carried, so the stored value is preserved on
+      -- conflict and returned here for the response projection.
+      estimated_filament_grams,
+      estimate_source,
       form_type,
       printed_status
     )
@@ -1295,6 +1309,8 @@ export async function upsertQueueJobs(jobs) {
           'progress', 0,
           'estimatedTime', estimated_time,
           'timeRemaining', estimated_time,
+          'estimatedFilament', estimated_filament_grams,
+          'estimateSource', estimate_source,
           'filamentUsed', 0,
           'priority', priority,
           'stlFileUrl', stl_file_url,
@@ -1392,6 +1408,8 @@ async function listQueueJobsByPrintedStatus(printedStatus) {
           'progress', 0,
           'estimatedTime', estimated_time,
           'timeRemaining', estimated_time,
+          'estimatedFilament', estimated_filament_grams,
+          'estimateSource', estimate_source,
           'filamentUsed', 0,
           'priority', priority,
           'stlFileUrl', CASE
@@ -1522,8 +1540,9 @@ export async function insertQueueSubmission(job) {
     INSERT INTO queue_jobs (
       id, filename, file_count, submitter_name, submitter_email, notes,
       submitted_at, priority, estimated_time, form_type, printed_status,
-      file_content, file_mime, file_size_bytes
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 0, $11, $12, $13)
+      file_content, file_mime, file_size_bytes,
+      estimated_filament_grams, estimate_source
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 0, $11, $12, $13, $14, $15)
     ON CONFLICT (id) DO UPDATE SET
       filename = EXCLUDED.filename,
       file_count = EXCLUDED.file_count,
@@ -1536,6 +1555,8 @@ export async function insertQueueSubmission(job) {
       file_content = EXCLUDED.file_content,
       file_mime = EXCLUDED.file_mime,
       file_size_bytes = EXCLUDED.file_size_bytes,
+      estimated_filament_grams = EXCLUDED.estimated_filament_grams,
+      estimate_source = EXCLUDED.estimate_source,
       deleted_at = NULL,
       updated_at = NOW();
   `,
@@ -1553,6 +1574,8 @@ export async function insertQueueSubmission(job) {
       job.fileContent,
       job.fileMime,
       job.fileSize,
+      job.estimatedFilamentGrams ?? null,
+      job.estimateSource ?? null,
     ],
   );
 }
@@ -1612,6 +1635,72 @@ export async function readQueueJobFileChunk(id, offset, length) {
   return result.rows[0].chunk;
 }
 
+// ── Queue estimate backfill ─────────────────────────────────────────────────
+// Rows submitted before the estimator existed (or while it was failing) carry a
+// NULL estimate_source. The backfill worker in server/queueEstimateBackfill.js
+// walks them oldest-first and fills them in.
+
+// Jobs still awaiting an estimate. Deliberately does NOT select file_content —
+// the bytes are streamed per job via readQueueJobFileChunk(), so resident memory
+// stays a small fixed window rather than scaling with the batch.
+export async function listQueueJobsNeedingEstimate(limit, maxBytes) {
+  await ensureSchema();
+  const result = await query(
+    `
+    SELECT id, filename, file_count, COALESCE(file_size_bytes, 0) AS file_size_bytes
+    FROM queue_jobs
+    WHERE form_type = $1
+      AND deleted_at IS NULL
+      AND estimate_source IS NULL
+      AND COALESCE(file_size_bytes, 0) > 0
+      AND COALESCE(file_size_bytes, 0) <= $2
+    ORDER BY submitted_at ASC NULLS LAST, created_at ASC
+    LIMIT $3;
+  `,
+    [QUEUE_FORM_TYPE, maxBytes, limit],
+  );
+  return result.rows;
+}
+
+// Record a backfilled estimate. `estimatedTime` is left alone when null so a
+// job whose file could not be parsed ('none') keeps whatever time it already
+// had; estimate_source is always written, which is what stops the worker from
+// picking the same unparseable row up forever.
+export async function updateQueueJobEstimate(id, { estimatedTime, filamentGrams, source }) {
+  await ensureSchema();
+  await query(
+    `
+    UPDATE queue_jobs
+    SET estimated_time = COALESCE($2, estimated_time),
+        estimated_filament_grams = $3,
+        estimate_source = $4,
+        updated_at = NOW()
+    WHERE id = $1
+      AND deleted_at IS NULL;
+  `,
+    [id, estimatedTime ?? null, filamentGrams ?? null, source],
+  );
+}
+
+// Mark every row that has no stored file (or one too large to parse) as
+// unestimatable in a single statement, so the worker never has to page through
+// them. Returns the number of rows stamped.
+export async function markQueueJobsUnestimatable(maxBytes) {
+  await ensureSchema();
+  const result = await query(
+    `
+    UPDATE queue_jobs
+    SET estimate_source = 'none', updated_at = NOW()
+    WHERE form_type = $1
+      AND deleted_at IS NULL
+      AND estimate_source IS NULL
+      AND (COALESCE(file_size_bytes, 0) = 0 OR COALESCE(file_size_bytes, 0) > $2);
+  `,
+    [QUEUE_FORM_TYPE, maxBytes],
+  );
+  return result.rowCount ?? 0;
+}
+
 // ── Queue migration (host → host) ──────────────────────────────────────────
 // A remote print-farm manager migrates the queue between hosts by pulling a
 // manifest from the source (exportQueueJobs), recreating the rows on the
@@ -1638,6 +1727,8 @@ export async function exportQueueJobs(includePrinted = false, ids = null) {
           'fileCount', file_count,
           'printedStatus', printed_status,
           'estimatedTime', estimated_time,
+          'estimatedFilament', estimated_filament_grams,
+          'estimateSource', estimate_source,
           'priority', priority,
           'stlFileUrl', stl_file_url,
           'submitterName', submitter_name,
@@ -1700,6 +1791,8 @@ export async function importQueueJobs(jobs) {
         END AS submitted_at,
         COALESCE(data->>'priority', 'low') AS priority,
         COALESCE((data->>'estimatedTime')::integer, 0) AS estimated_time,
+        (data->>'estimatedFilament')::double precision AS estimated_filament_grams,
+        NULLIF(data->>'estimateSource', '') AS estimate_source,
         COALESCE((data->>'printedStatus')::integer, 0) AS printed_status
       FROM input
       WHERE COALESCE(data->>'id', '') <> ''
@@ -1707,11 +1800,13 @@ export async function importQueueJobs(jobs) {
     upserted AS (
       INSERT INTO queue_jobs (
         id, filename, file_count, stl_file_url, submitter_name, submitter_email,
-        notes, submitted_at, priority, estimated_time, form_type, printed_status
+        notes, submitted_at, priority, estimated_time, form_type, printed_status,
+        estimated_filament_grams, estimate_source
       )
       SELECT
         id, filename, file_count, stl_file_url, submitter_name, submitter_email,
-        notes, submitted_at, priority, estimated_time, $2, printed_status
+        notes, submitted_at, priority, estimated_time, $2, printed_status,
+        estimated_filament_grams, estimate_source
       FROM normalized
       ON CONFLICT (id) DO UPDATE SET
         filename = EXCLUDED.filename,
@@ -1723,6 +1818,8 @@ export async function importQueueJobs(jobs) {
         submitted_at = EXCLUDED.submitted_at,
         priority = EXCLUDED.priority,
         estimated_time = EXCLUDED.estimated_time,
+        estimated_filament_grams = EXCLUDED.estimated_filament_grams,
+        estimate_source = EXCLUDED.estimate_source,
         printed_status = EXCLUDED.printed_status,
         form_type = EXCLUDED.form_type,
         deleted_at = NULL,

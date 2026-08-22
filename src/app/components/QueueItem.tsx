@@ -5,6 +5,7 @@ import { Button } from './ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover';
 import { QueueModelViewerDialog } from './QueueModelViewerDialog';
 import { detectModelFormat } from '../lib/modelFormats';
+import { formatDurationMinutes, formatMaxTwoDecimals } from '../lib/numberFormat';
 
 interface QueueItemProps {
   job: PrintJob;
@@ -38,6 +39,28 @@ export function QueueItem({
   // public queue projection entirely). No mode check is needed on top.
   const showPreview = canPreview && !!job.hasFile && detectModelFormat(job.filename) !== null;
 
+  // Print-time / filament estimate. 'none' (or an absent source, i.e. a job
+  // stored before the estimator existed) means estimatedTime is still the old
+  // quantity-derived placeholder, so nothing is shown rather than a made-up
+  // number. A sliced upload carries the slicer's own figures, so it is shown
+  // without the "~" the heuristic gets.
+  const isExactEstimate = job.estimateSource === 'slicer';
+  const hasEstimate =
+    isExactEstimate || job.estimateSource === 'geometry' || job.estimateSource === 'bbox';
+  const estimateTitle = isExactEstimate
+    ? 'From the sliced file — the slicer\u2019s own figures'
+    : 'Approximate — computed from the model geometry, not a real slice';
+  const estimateParts = hasEstimate
+    ? [
+        job.estimatedTime > 0
+          ? `${isExactEstimate ? '' : '~'}${formatDurationMinutes(job.estimatedTime)}`
+          : null,
+        typeof job.estimatedFilament === 'number' && job.estimatedFilament > 0
+          ? `${isExactEstimate ? '' : '~'}${formatMaxTwoDecimals(job.estimatedFilament)} g`
+          : null,
+      ].filter(Boolean)
+    : [];
+
   const formatDate = (dateString?: string) => {
     if (!dateString) return '';
     const date = new Date(dateString);
@@ -61,7 +84,16 @@ export function QueueItem({
                 {job.submitterName || job.filename}
               </div>
               <div className="text-sm text-muted-foreground mt-1">
-                {job.fileCount ?? 1} piece{(job.fileCount ?? 1) === 1 ? '' : 's'}
+                <span>
+                  {job.fileCount ?? 1} piece{(job.fileCount ?? 1) === 1 ? '' : 's'}
+                </span>
+                {estimateParts.length > 0 && (
+                  <span title={estimateTitle}>
+                    {estimateParts.map((part) => (
+                      <span key={part}> · {part}</span>
+                    ))}
+                  </span>
+                )}
               </div>
             </div>
 
