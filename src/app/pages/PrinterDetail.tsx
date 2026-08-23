@@ -39,6 +39,7 @@ import {
   SlidersHorizontal,
   OctagonAlert,
   RotateCcw,
+  ExternalLink,
 } from 'lucide-react';
 import {
   MOTION_STEP_OPTIONS,
@@ -993,6 +994,15 @@ export function PrinterDetail() {
   // The printer's IP is a connection secret operators shouldn't need, so it is
   // admin-only — a tighter gate than the rest of the sensitive info block.
   const canViewIpAddress = user?.role === 'admin';
+  // The IP readout doubles as a link to the printer's own web interface. Use the
+  // stored base URL when it is a plain http(s) address, otherwise derive one from
+  // the IP the same way the profiles do.
+  const printerWebUrl = (() => {
+    const stored = (printer.url || '').trim();
+    if (/^https?:\/\//i.test(stored)) return stored;
+    const ip = (printer.ipAddress || '').trim();
+    return ip ? `http://${ip}` : '';
+  })();
   const supportsWebcamStream = printerSupportsWebcamStream(printer);
   const supportsLiveMjpeg = printerSupportsLiveMjpeg(printer);
   const webcamSnapshotUrl = `${buildPrinterWebcamSnapshotUrl(printer)}?t=${snapshotNonce}`;
@@ -2366,7 +2376,20 @@ export function PrinterDetail() {
                   <Network className="size-4 mt-0.5 text-muted-foreground" />
                   <div className="flex-1">
                     <div className="text-sm text-muted-foreground">IP Address</div>
-                    <div className={`${READOUT} font-medium`}>{printer.ipAddress}</div>
+                    {printerWebUrl ? (
+                      <a
+                        href={printerWebUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        title="Open the printer's web interface in a new tab"
+                        className={`${READOUT} font-medium inline-flex items-center gap-1.5 text-primary hover:underline`}
+                      >
+                        {printer.ipAddress}
+                        <ExternalLink className="size-3.5" />
+                      </a>
+                    ) : (
+                      <div className={`${READOUT} font-medium`}>{printer.ipAddress}</div>
+                    )}
                   </div>
                 </div>
               )}
