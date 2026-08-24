@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useLocation, Navigate, Link } from 'react-router';
 import { toast } from 'sonner';
 import { useAuth } from '../contexts/AuthContext';
@@ -7,9 +7,20 @@ import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { Checkbox } from '../components/ui/checkbox';
-import { Eye, EyeOff, ClipboardList, KeyRound } from 'lucide-react';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '../components/ui/alert-dialog';
+import { Eye, EyeOff, ClipboardList, KeyRound, Loader2, Upload } from 'lucide-react';
 import { PUBLIC_VIEWER_MODE } from '../lib/runtimeConfig';
 import { fetchAdminConfigured } from '../lib/adminCredentialApi';
+import { restoreBackupFirstRun } from '../lib/backupApi';
 import { fetchEnabledOAuthProviders, type EnabledOAuthProviders } from '../lib/oauthApi';
 import { Logo } from '../components/Logo';
 
@@ -42,6 +53,9 @@ export function Login() {
   // While null we hold off rendering either form to avoid a flicker.
   const [adminConfigured, setAdminConfigured] = useState<boolean | null>(null);
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [restoringBackup, setRestoringBackup] = useState(false);
+  const [pendingBackupFile, setPendingBackupFile] = useState<File | null>(null);
+  const backupFileInputRef = useRef<HTMLInputElement>(null);
   const [oauthProviders, setOauthProviders] = useState<EnabledOAuthProviders>({
     keycloak: false,
     keycloakLabel: '',
@@ -136,6 +150,34 @@ export function Login() {
     }
   };
 
+  const handleBackupFileSelected = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0] ?? null;
+    event.target.value = '';
+    if (file) {
+      setPendingBackupFile(file);
+    }
+  };
+
+  const handleConfirmRestoreBackup = async () => {
+    const file = pendingBackupFile;
+    if (!file) return;
+    setRestoringBackup(true);
+    const result = await restoreBackupFirstRun(file);
+    if (result.ok) {
+      toast.success('Backup restored. Sign in with its admin password.', { duration: Infinity });
+      setPendingBackupFile(null);
+      setAdminConfigured(await fetchAdminConfigured());
+      setRestoringBackup(false);
+      return;
+    }
+    toast.error(result.error || 'Restore failed; no changes were made.');
+    setPendingBackupFile(null);
+    setRestoringBackup(false);
+    // A concurrent setup (another tab/device) may have completed first —
+    // re-check so we don't keep offering an endpoint that will now 409.
+    setAdminConfigured(await fetchAdminConfigured());
+  };
+
   // A saved (remembered) login is restored during auth bootstrap. Once a real
   // user is signed in, don't show the login form again — send them on to the app
   // until they explicitly log out. Viewers stay on the login screen so they can
@@ -228,6 +270,38 @@ export function Login() {
                 <Button type="submit" className="w-full" disabled={isLoading}>
                   {isLoading ? 'Saving...' : 'Set admin password'}
                 </Button>
+
+                <div className="flex items-center gap-3">
+                  <span className="h-px flex-1 bg-border" />
+                  <span className="text-xs uppercase tracking-wide text-muted-foreground">or</span>
+                  <span className="h-px flex-1 bg-border" />
+                </div>
+
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full"
+                  disabled={restoringBackup}
+                  onClick={() => backupFileInputRef.current?.click()}
+                >
+                  {restoringBackup ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Upload className="h-4 w-4" />
+                  )}
+                  {restoringBackup ? 'Restoring…' : 'Restore from a backup instead'}
+                </Button>
+                <p className="text-xs text-muted-foreground">
+                  Migrating from a previous print farm? Restoring a backup here also
+                  restores its admin password — you'll sign in with that afterward.
+                </p>
+                <input
+                  ref={backupFileInputRef}
+                  type="file"
+                  accept=".zip"
+                  className="hidden"
+                  onChange={handleBackupFileSelected}
+                />
               </form>
             ) : isAdminPage ? (
               <form onSubmit={handleSubmit} className="space-y-4">
@@ -335,6 +409,34 @@ export function Login() {
             </Button>
           </div>
         </Card>
+
+        <AlertDialog
+          open={pendingBackupFile !== null}
+          onOpenChange={(open) => !open && !restoringBackup && setPendingBackupFile(null)}
+        >
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Restore from backup?</AlertDialogTitle>
+              <AlertDialogDescription asChild>
+                <div className="space-y-2 text-left">
+                  <p>
+                    This loads <strong>{pendingBackupFile?.name}</strong> into this print
+                    farm, including its printers, filament inventory, queue history,
+                    settings, and its own admin password — replacing the fresh, empty
+                    database this instance started with. This cannot be undone.
+                  </p>
+                  <p>You'll sign in afterward using that backup's original admin password.</p>
+                </div>
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={restoringBackup}>Cancel</AlertDialogCancel>
+              <AlertDialogAction disabled={restoringBackup} onClick={() => void handleConfirmRestoreBackup()}>
+                Restore
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </div>
     </div>
   );

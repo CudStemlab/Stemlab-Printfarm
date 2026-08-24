@@ -84,6 +84,20 @@ t('software update mutations are admin-only', () => {
   assert.equal(requiredCapability('POST', '/api/admin/update/rollback'), CAP.SETTINGS_ADMIN);
   assert.equal(requiredCapability('POST', '/api/admin/update/runs/42/cancel'), CAP.SETTINGS_ADMIN);
 });
+// First-run backup restore carve-out (lets a fresh instance be bootstrapped
+// from a backup instead of a new password) is public the same way admin
+// credential first-run setup is — both are handler-enforced 409-once-set, not
+// permanently open. The authenticated restore endpoint must stay untouched.
+t('first-run backup restore is public, same carve-out as credential setup', () => {
+  assert.equal(requiredCapability('POST', '/api/admin/backup/restore-first-run'), PUBLIC);
+  assert.equal(requiredCapability('POST', '/api/admin/credential'), PUBLIC);
+});
+t('authenticated backup restore stays admin-only', () => {
+  assert.equal(requiredCapability('POST', '/api/admin/backup/restore'), CAP.SETTINGS_ADMIN);
+  assert.equal(decide(null, 'POST', '/api/admin/backup/restore'), '401');
+  assert.equal(decide(ROLE.OPERATOR, 'POST', '/api/admin/backup/restore'), '403');
+  assert.equal(decide(ROLE.ADMIN, 'POST', '/api/admin/backup/restore'), 'allow');
+});
 t('non-admin roles cannot reach the update surface', () => {
   for (const path of [
     '/api/admin/update-status',

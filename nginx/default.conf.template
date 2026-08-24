@@ -264,6 +264,19 @@ server {
     proxy_send_timeout 3600s;
   }
 
+  # Pre-auth first-run counterpart to the route above (restoring a backup
+  # instead of choosing a fresh admin password) — same archive, same size.
+  location = /api/admin/backup/restore-first-run {
+    proxy_pass http://web:5173;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto $forwarded_proto;
+    client_max_body_size ${BACKUP_MAX_BODY_SIZE};
+    proxy_request_buffering off;
+    proxy_read_timeout 3600s;
+    proxy_send_timeout 3600s;
+  }
+
   # Branding uploads carry the logo plus an optional full-page background image
   # as base64 data URLs, which exceed the global 2m cap. Lift it for this one
   # endpoint so admins can upload a normal-sized background.
