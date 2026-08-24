@@ -39,7 +39,7 @@ export const CAP = Object.freeze({
   FILAMENT_WRITE: 'filament:write',
   FILAMENT_ADMIN: 'filament:admin', // delete, kiosk system command
   NOTIFICATIONS_ADMIN: 'notifications:admin', // Discord webhook CRUD (secret URLs)
-  SETTINGS_ADMIN: 'settings:admin', // app settings, SAML/SSO, HA, backups, updates
+  SETTINGS_ADMIN: 'settings:admin', // app settings, OAuth/SSO, HA, backups, updates
   USERS_ADMIN: 'users:admin', // staff accounts, manager requests
   KEYS_ADMIN: 'keys:admin', // API/slicer keys
   AUDIT_READ: 'audit:read',
@@ -142,7 +142,6 @@ const PUBLIC_MUTATIONS = new Set([
   'POST /api/auth/login',
   'POST /api/auth/logout',
   'POST /api/auth/verify',
-  'POST /api/auth/saml/acs',
   'POST /api/slicer-grant/verify',
   'POST /api/admin/credential/verify',
   'POST /api/users/verify',
@@ -159,12 +158,17 @@ function sensitiveReadCapability(p) {
   if (p === '/api/slicer-keys' || p.startsWith('/api/slicer-keys/')) return CAP.KEYS_ADMIN;
   if (p === '/api/audit-logs') return CAP.AUDIT_READ;
   if (p === '/api/admin/update-status') return CAP.SETTINGS_ADMIN;
+  // Update pre-flight and run history. These MUST be classified here: an
+  // unclassified GET falls through to CAP.AUTHED below, which would let any
+  // signed-in viewer read the farm's deploy history and pre-flight detail
+  // (printer names, queue depth, backup recency).
+  if (p === '/api/admin/update/preflight') return CAP.SETTINGS_ADMIN;
+  if (p === '/api/admin/update/runs' || p.startsWith('/api/admin/update/runs/')) return CAP.SETTINGS_ADMIN;
   if (p === '/api/admin/backup/download') return CAP.SETTINGS_ADMIN;
   if (p === '/api/network-usage' || p === '/api/network-usage/live') return CAP.AUDIT_READ;
   if (p.startsWith('/api/notifications/')) return CAP.NOTIFICATIONS_ADMIN;
   if (p === '/api/manager/requests') return CAP.USERS_ADMIN;
   if (p.startsWith('/api/manager/requests/') && !p.endsWith('/status')) return CAP.USERS_ADMIN;
-  if (p === '/api/settings/saml') return CAP.SETTINGS_ADMIN;
   if (p.startsWith('/api/settings/home-assistant')) return CAP.SETTINGS_ADMIN;
   // The printer callback URL is the SERVER's own LAN address (e.g.
   // http://192.168.x.x:8080) that H2 printers call back to — an infrastructure
@@ -213,9 +217,14 @@ function adminMutationCapability(method, p) {
   if (p.startsWith('/api/slicer-keys/') && method === 'DELETE') return CAP.KEYS_ADMIN;
   if (p === '/api/admin/credential' && method === 'PUT') return CAP.SETTINGS_ADMIN;
   if (p === '/api/admin/update/apply' && method === 'POST') return CAP.SETTINGS_ADMIN;
+  // Rollback republishes older images farm-wide; cancel releases the update
+  // concurrency guard. Both would already land on SETTINGS_ADMIN via the
+  // default-deny mutation fallback — listed explicitly so the policy is
+  // readable rather than implied.
+  if (p === '/api/admin/update/rollback' && method === 'POST') return CAP.SETTINGS_ADMIN;
+  if (p.startsWith('/api/admin/update/runs/') && p.endsWith('/cancel') && method === 'POST') return CAP.SETTINGS_ADMIN;
   if (p === '/api/admin/backup/restore' && method === 'POST') return CAP.SETTINGS_ADMIN;
   if (p.startsWith('/api/notifications/')) return CAP.NOTIFICATIONS_ADMIN;
-  if (p === '/api/settings/saml' || p === '/api/settings/saml/test') return CAP.SETTINGS_ADMIN;
   if (p.startsWith('/api/settings/') && method !== 'GET') return CAP.SETTINGS_ADMIN;
   if (p === '/api/analytics/daily/reset') return CAP.ANALYTICS_ADMIN;
   if (p === '/api/queue/reset') return CAP.QUEUE_ADMIN;
@@ -249,6 +258,9 @@ export function requiredCapability(method, pathname, { publicViewer = false } = 
   // Mutations
   if (PUBLIC_MUTATIONS.has(`${m} ${pathname}`)) return PUBLIC;
   if (m === 'POST' && pathname === '/api/admin/credential') return PUBLIC; // first-run (handler 409s once set)
+  // Same first-run carve-out, for restoring a backup instead of choosing a
+  // fresh password — the handler 409s once an admin password is configured.
+  if (m === 'POST' && pathname === '/api/admin/backup/restore-first-run') return PUBLIC;
   if (pathname === '/api/audit-logs' && m === 'POST') return CAP.AUTHED;
   if (pathname === '/api/auth/slicer-token' && (m === 'POST' || m === 'DELETE')) return CAP.AUTHED;
   const op = operatorMutationCapability(m, pathname);

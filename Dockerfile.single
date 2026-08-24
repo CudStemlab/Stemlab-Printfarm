@@ -1,0 +1,126 @@
+# All-in-one image: the entire print farm in ONE container.
+#
+# Squashes the eight-service compose stack down to a single image by:
+#   - running PostgreSQL 16 inside the container (same server version as the
+#     split stack, so no SQL changes: advisory locks, bytea/TOAST, server-side
+#     cursors, REPEATABLE READ backup snapshots and RLS all behave identically),
+#   - mounting the slicer proxy and the MCP server IN-PROCESS on the Node web
+#     server (EMBED_SLICER_PROXY / EMBED_MCP) instead of running them as their
+#     own containers behind nginx,
+#   - dropping nginx: Node terminates the public port directly (CSP/HSTS already
+#     live in the app, not in nginx), so put TLS on an external reverse proxy,
+#   - dropping Redis (already optional) and Prometheus (scrape the exporter from
+#     an external Prometheus/Grafana).
+#
+# The Go poller and Go exporter still run as their own processes — they are
+# 9 MB and 4 MB respectively — supervised by docker/single/entrypoint.sh.
+#
+# The multi-container stack (docker-compose.yml + Dockerfile.web etc.) is
+# untouched and remains the default; this is a parallel packaging.
+
+# ---------------------------------------------------------------------------
+# Stage 1: build the React SPA.
+# ---------------------------------------------------------------------------
+FROM node:20-bookworm-slim AS frontend
+
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci
+
+COPY . .
+
+ARG VITE_PUBLIC_VIEWER_MODE=false
+ENV VITE_PUBLIC_VIEWER_MODE=$VITE_PUBLIC_VIEWER_MODE
+RUN npm run build
+
+# ---------------------------------------------------------------------------
+# Stage 2: build the Go poller and exporter (static, CGO-free).
+# ---------------------------------------------------------------------------
+FROM golang:1.22-bookworm AS gobuild
+
+WORKDIR /src
+COPY go-services/go.mod go-services/go.sum ./
+RUN go mod download
+COPY go-services/ ./
+RUN CGO_ENABLED=0 GOFLAGS=-trimpath go build -ldflags="-s -w" -o /out/poller ./cmd/poller \
+ && CGO_ENABLED=0 GOFLAGS=-trimpath go build -ldflags="-s -w" -o /out/exporter ./cmd/exporter
+
+# ---------------------------------------------------------------------------
+# Stage 3: runtime — Node + PostgreSQL 16 + ffmpeg + the two Go binaries.
+# ---------------------------------------------------------------------------
+FROM node:20-bookworm-slim AS runtime
+
+ENV NODE_ENV=production
+ENV PORT=5173
+
+# Git commit SHA this image was built from (CI passes it; "dev" locally). The
+# server reports it as the running version for the admin update check.
+ARG APP_VERSION=dev
+ENV APP_VERSION=$APP_VERSION
+
+# ffmpeg: H2/X1-class Bambu camera (RTSP-over-TLS) transcode.
+# postgresql-16 from PGDG so the in-container server matches the `db` service of
+# the split stack exactly (bookworm's own repo ships 15).
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends ca-certificates curl gnupg ffmpeg; \
+    curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+      | gpg --dearmor -o /usr/share/keyrings/postgresql.gpg; \
+    echo "deb [signed-by=/usr/share/keyrings/postgresql.gpg] https://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" \
+      > /etc/apt/sources.list.d/pgdg.list; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends postgresql-16 postgresql-client-16; \
+    apt-get purge -y --auto-remove curl gnupg; \
+    rm -rf /var/lib/apt/lists/*
+
+ENV PATH="/usr/lib/postgresql/16/bin:${PATH}"
+
+WORKDIR /app
+
+# One unprivileged user owns everything, including the database cluster —
+# PostgreSQL refuses to run as root but is happy as any other user, so the whole
+# container (PID 1 included) stays non-root and keeps cap_drop: ALL working.
+RUN groupadd --system printfarm \
+ && useradd --system --gid printfarm --home-dir /app printfarm \
+ && mkdir -p /var/lib/printfarm/pgdata /var/run/postgresql /var/log/printfarm /var/tmp/printfarm \
+ && chown -R printfarm:printfarm /var/lib/printfarm /var/run/postgresql /var/log/printfarm /var/tmp/printfarm /app \
+ && chmod 700 /var/lib/printfarm/pgdata
+
+# Runtime dependency union of the three Node services this image collapses:
+#   web          — pg, mqtt, busboy, ioredis, xml-crypto + @xmldom/xmldom + xpath
+#                  (SAML), aedes + ws (status-light broker)
+#   slicer-proxy — pg, mqtt, busboy, basic-ftp
+#   mcp          — @modelcontextprotocol/sdk, zod
+# Keep these versions in sync with package.json. Installed into an empty dir
+# (before COPY package.json) so npm doesn't try to resolve the frontend tree.
+RUN npm install pg@8.21.0 mqtt@5.15.1 busboy@1.6.0 ioredis@5.4.1 \
+      xml-crypto@6.0.1 @xmldom/xmldom@0.8.10 xpath@0.0.34 \
+      aedes@1.1.1 ws@8.21.0 basic-ftp@5.3.1 \
+      @modelcontextprotocol/sdk@1.29.0 zod@3.25.76 \
+      --no-save --no-audit --no-fund \
+ && npm cache clean --force
+
+# Needed at runtime for "type": "module" — the server is ES modules.
+COPY package.json ./
+
+COPY --from=frontend /app/dist ./dist
+COPY server ./server
+COPY slicer-proxy ./slicer-proxy
+COPY mcp ./mcp
+COPY --from=gobuild /out/poller /usr/local/bin/printfarm-poller
+COPY --from=gobuild /out/exporter /usr/local/bin/printfarm-exporter
+COPY --chmod=755 docker/single/entrypoint.sh /usr/local/bin/printfarm-entrypoint
+
+USER printfarm
+
+ENV PGDATA=/var/lib/printfarm/pgdata
+
+# Public site (Node serves the SPA, /api/*, /printers/, /mqtt, /mcp directly).
+EXPOSE 5173
+# printfarm_* farm metrics (Go exporter) and printfarm_web_* request metrics.
+EXPOSE 9180 9181
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
+  CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||5173)+'/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+
+ENTRYPOINT ["/usr/local/bin/printfarm-entrypoint"]

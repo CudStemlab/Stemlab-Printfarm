@@ -113,11 +113,18 @@ Lists the available resources.
 | `GET /printers/:id` | Fetch one printer; `404` if not found. |
 | `POST /printers` | Create or update a printer. Body must include `id`. Returns the saved record. |
 | `DELETE /printers/:id` | Delete a printer. |
-| `POST /printers/:id/command` | Send a **Bambu** MQTT command (pause/resume/cancel, temps, fans, etc.). |
+| `POST /printers/:id/command` | Send a **Bambu** MQTT command (pause/resume/cancel, temps, fans, calibration, etc.). |
 | `ANY /printers/:id/proxy/<path…>` | Raw HTTP passthrough to the printer's hardware API (e.g. Moonraker on a Snapmaker U1) — for **non-Bambu** control parity. |
 | `GET /printers/:id/camera/snapshot` | A single JPEG frame from the printer's webcam. |
 | `GET /printers/:id/camera/stream` | Live MJPEG stream where supported, else a single JPEG. |
 | `GET /printers/:id/camera/health` | Live-view supervisor status (frame freshness, viewers, restarts). |
+
+A printer's `spools` array carries the poller's live view of each AMS slot
+(`id`, `material`, `color`, `remaining`, `weight`, plus `tagUid`/`trayUuid` for
+RFID-tagged spools). Each entry also has **`active`** — `true` for the one slot
+whose filament is currently fed to the extruder, `false` for the rest, and false
+on every slot when nothing is loaded. Use it to gate `refresh_rfid` (below) and
+to show which spool a print is actually consuming.
 
 Printer records include an `errorMessage` field: a human-readable description of
 the printer's current fault (Bambu HMS faults, a Moonraker print error, or an
@@ -148,7 +155,45 @@ accrued hours aren't overwritten.
 { "command": "pause" }
 ```
 Other accepted fields: `heater`, `target`, `nozzleIndex`, `gcode`, `trayId`,
-`fanPort`, `speed`, `modeId`, `submode`.
+`fanPort`, `speed`, `modeId`, `submode`, `type`, `color`, `vendor`, `routine`.
+
+**`calibrate`** — run the printer's own built-in calibration. Bambu only.
+
+```json
+{ "command": "calibrate", "routine": "bed_level" }
+```
+
+`routine` is one of `bed_level`, `vibration` (vibration compensation),
+`motor_noise` (motor noise cancellation), or `full` (all three, in the printer's
+own order). Any other value returns an error. The server maps the name to the
+bitmask Bambu's `calibration` command expects — the raw integer is deliberately
+**not** accepted from callers, so an undocumented bit can't be set.
+
+The bit meanings are documented for the A1/P1 series and are not verified on the
+H2 series; H2D dual-nozzle offset calibration is a separate command and is not
+exposed here. There is **no completion signal** — the printer reports `printing`
+with no `currentJob` while calibrating, and returns to `idle` when done. Abort
+with `{ "command": "cancel" }`.
+
+Non-Bambu printers calibrate through the hardware proxy instead, e.g.
+`POST /printers/:id/proxy/printer/gcode/script?script=BED_MESH_CALIBRATE` on a
+Snapmaker U1. Moonraker does not respond to that call until the routine
+*finishes*, so expect the request to hold for minutes.
+
+**`refresh_rfid`** — ask the AMS to physically re-scan the RFID tag in one slot,
+for when the initial read came back garbled or empty. Bambu only.
+
+```json
+{ "command": "refresh_rfid", "trayId": 2 }
+```
+
+`trayId` is the global tray id (AMS unit × 4 + tray, or `254` for the external
+spool). The AMS has to spin the spool past its reader, so the command only takes
+effect with **no filament loaded** — publish is QoS 0 with no acknowledgement, so
+a call made while filament is loaded returns `204` and silently does nothing.
+Callers can tell which slot is loaded from the `active` flag on each entry of a
+printer's `spools` array. Refreshed tag data lands via the poller within a few
+seconds.
 
 #### Hardware control (non-Bambu) — `/printers/:id/proxy/<path…>`
 
@@ -215,10 +260,39 @@ sync — that behavior lives on the frontend `/api/queue` path only.
 | Method & path | Description |
 |---------------|-------------|
 | `GET /queue` | List stored queue jobs. |
-| `POST /queue` | Upsert jobs. Body is an array, or `{ "jobs": [...] }`. Returns `{ "added": [...] }`. |
+| `POST /queue` | Upsert jobs. Body is an array, or `{ "jobs": [...] }`. Returns `{ "added": [...] }`. Does **not** accept `estimatedFilament`/`estimateSource` — an upsert that omits them leaves the stored estimate intact rather than clearing it. |
 | `POST /queue/reset` | Clear `printed_status` for all non-deleted jobs. |
 | `POST /queue/:id/printed` | Mark a job printed. |
 | `DELETE /queue/:id` | Soft-delete a job (sets `deleted_at`). |
+
+#### Print-time / filament estimate
+
+Every job in a `GET /queue` (and `GET /api/queue`) response carries an estimate
+derived from the uploaded model when it was submitted:
+
+| Field | Meaning |
+|-------|---------|
+| `estimatedTime` | Estimated print time in **minutes**, for the whole job (all `fileCount` pieces). |
+| `estimatedFilament` | Estimated filament in **grams**, for the whole job. `null` when no weight could be derived. |
+| `estimateSource` | Where the numbers came from — see below. `null` on a row not yet processed by the backfill. |
+
+`estimateSource` values:
+
+- `slicer` — the upload was an already-sliced `.3mf`, so these are the slicer's
+  own `weight` / `prediction` figures from `Metadata/slice_info.config`. Exact.
+- `geometry` — computed from the mesh's solid volume and surface area through a
+  shell/infill/flow model. **Approximate** (±30–50%); tune with the
+  `PRINT_ESTIMATE_*` env vars, chiefly `PRINT_ESTIMATE_TIME_FACTOR`.
+- `bbox` — the mesh is open or non-manifold, so its volume is meaningless and a
+  fraction of the bounding box was used instead. Roughest of the three.
+- `none` — the file could not be estimated (unsupported, corrupt, or over
+  `PRINT_ESTIMATE_MAX_BYTES` / `PRINT_ESTIMATE_MAX_TRIANGLES`). `estimatedTime`
+  is then the legacy quantity-derived placeholder and `estimatedFilament` is
+  `null`; treat both as absent.
+
+A client showing these to a user should mark anything other than `slicer` as
+approximate. `filamentUsed` is unrelated — it is *actual* consumption, and is
+always `0` for a queued job.
 
 #### Migration (host → host)
 
@@ -228,8 +302,8 @@ a large model never has to be base64-encoded inside one JSON document.
 
 | Method & path | Description |
 |---------------|-------------|
-| `GET /queue/export` | Metadata-only manifest of stored jobs → `{ "jobs": [...] }`. Pending jobs only by default; add `?includePrinted=true` to also include printed history. Migrate **only a selection** with `?ids=a,b,c` (comma-separated, repeatable). Each job carries `hasFile`, `fileMime`, `fileSize`. |
-| `POST /queue/import` | Recreate rows from a manifest. Body is an array or `{ "jobs": [...] }`. Preserves `id`, `printedStatus`, and `submittedAt` (idempotent upsert on `id`). Returns `{ "imported": <count> }`. |
+| `GET /queue/export` | Metadata-only manifest of stored jobs → `{ "jobs": [...] }`. Pending jobs only by default; add `?includePrinted=true` to also include printed history. Migrate **only a selection** with `?ids=a,b,c` (comma-separated, repeatable). Each job carries `hasFile`, `fileMime`, `fileSize`, and its `estimatedTime` / `estimatedFilament` / `estimateSource`. |
+| `POST /queue/import` | Recreate rows from a manifest. Body is an array or `{ "jobs": [...] }`. Preserves `id`, `printedStatus`, `submittedAt`, and the estimate fields (idempotent upsert on `id`), so a migrated queue does not have to be re-estimated. Returns `{ "imported": <count> }`. |
 | `GET /queue/:id/file` | Stream a job's stored model bytes (`Content-Disposition: attachment`). `404` if the job has no stored file. |
 | `PUT /queue/:id/file` | Attach model bytes to an already-imported job. Send the file as the **raw request body**; `Content-Type` becomes the stored MIME. `404` if the job doesn't exist yet. Returns `{ "id", "fileSize" }`. |
 | `POST /queue/delete` | Bulk soft-delete the source rows after migration. Body is an array or `{ "ids": [...] }`. Returns `{ "deleted": <count> }`. |
@@ -321,20 +395,22 @@ the cookie-session frontend.
 ### Status Lights — `/api/v1/status-light` (also `/api/status-light/*`, cookie-session)
 
 Per-printer ESP32-C3 RGB status lights (see `server/statusLightBroker.js` and
-`firmware/status-light/`). The `web` service embeds an MQTT broker (aedes): raw
-TCP on `MQTT_PORT` (host) → `1883` (container), plus MQTT-over-WebSockets at
-`/mqtt` on the normal web port through nginx. Each device joins WiFi, connects to
-the broker, and **subscribes** to its printer's retained status topic
-(`printfarm/printers/<printerId>/status`); the web tier re-reads printer status
-from the DB every `STATUS_LIGHT_PUBLISH_INTERVAL_MS` and publishes any change.
-Devices report liveness via a retained availability topic
+`firmware/status-light/`). The `web` service embeds an MQTT broker (aedes),
+reachable **only** over MQTT-over-WebSockets (wss) at `/mqtt` on the normal web
+port through nginx — there is no raw-TCP listener or extra host port. Each
+device joins WiFi, connects to the broker, and **subscribes** to its printer's
+retained status topic (`printfarm/printers/<printerId>/status`); the web tier
+re-reads printer status from the DB every `STATUS_LIGHT_PUBLISH_INTERVAL_MS` and
+publishes any change. Devices report liveness via a retained availability topic
 (`printfarm/lights/<printerId>/availability`, also the MQTT LWT).
 `STATUS_LIGHT_ENABLED=false` (or the legacy `STATUS_LIGHT_MQTT_ENABLED=false`)
-disables the broker.
+disables the broker. Because it's wss-only, the site needs a certificate the
+device's public-CA bundle trusts (Let's Encrypt-style — a self-signed cert will
+not validate; see `firmware/status-light/README.md`).
 
 | Method & path | Description |
 |---------------|-------------|
-| `GET /status-light/provisioning` | Broker connection parameters + shared credential a device needs: `{ enabled, mqttPort, wsPath, username, password, statusTopic }` (`statusTopic` has a `{printerId}` placeholder). When disabled: `{ enabled: false }`. **Carries the shared broker credential** → `printfarm_manage` on `/api/v1`; admin-only on the frontend mirror. |
+| `GET /status-light/provisioning` | Broker connection parameters + shared credential a device needs: `{ enabled, wsPath, username, password, statusTopic }` (`statusTopic` has a `{printerId}` placeholder). When disabled: `{ enabled: false }`. **Carries the shared broker credential** → `printfarm_manage` on `/api/v1`; admin-only on the frontend mirror. |
 | `GET /status-light/devices` | Lights currently connected: `{ devices: [{ printerId, connected, lastSeen }] }`. `connected` reflects the broker's live connection / availability (LWT) state. No secrets. |
 | `GET /status-light/printers/:id` | The plain status the broker publishes: `{ id, status }` where `status` ∈ `idle\|printing\|paused\|error\|offline` (same live-telemetry overlay as `/api/printers/:id`). Exposed as a read for `/api/v1` parity and debugging; does not affect device presence. `404` if the printer is unknown. |
 
@@ -346,8 +422,9 @@ card** flashes and provisions a device in-browser over Web Serial.
 
 **MQTT contract:** the device authenticates with the shared credential and
 subscribes to `printfarm/printers/<printerId>/status` (retained, plain string).
-The broker/host and transport (`tcp`/`ws`/`wss`) are written to the device
-out-of-band (serial provisioning protocol in `firmware/status-light/README.md`).
+The broker host/port are written to the device out-of-band (serial provisioning
+protocol in `firmware/status-light/README.md`); the dashboard's flash dialog
+always provisions the `wss` transport.
 
 ---
 
@@ -576,6 +653,7 @@ requests, so the SPA does not handle it directly. Authorization is enforced in
 | `POST` | `/api/auth/verify` | public | OAuth/SSO grant exchange. On success **also issues a session cookie**. |
 | `POST` | `/api/slicer-grant/verify` | public | Verifies a slicer "Device" grant and issues an **operator** session cookie. |
 | `POST` | `/api/admin/credential` | public (first-run only) | Sets the initial admin password and issues an admin session. Refuses (`409`) once configured. |
+| `POST` | `/api/admin/backup/restore-first-run` | public (first-run only) | First-run alternative to the above: restores a full backup archive (same body/behavior as `POST /api/admin/backup/restore` below) instead of choosing a new password. Refuses (`409`) once an admin password is configured — same one-shot window as `POST /api/admin/credential`. Since the archive's `app_settings` table carries the original `admin_credential`, this re-establishes that instance's admin password; the response does **not** issue a session (the server never sees the plaintext), so the caller signs in afterward with the restored password. |
 | `PUT` | `/api/admin/credential` | public + current-password proof | Changes the admin password; **revokes all existing admin sessions** and re-issues the caller's. |
 | `POST` | `/api/admin/credential/verify` | public | Validates the admin password. Body `{ password }` (plaintext over TLS; server hashes — legacy `{ passwordHash }` still accepted) → `200 { valid: true }` or `401 { valid: false }`. Brute-force throttled on the **same** IP + username (`admin`) buckets as `/api/auth/login` → `429` when locked, so it can't be used as an unthrottled oracle. |
 | `POST` | `/api/users/verify` | public | Validates a staff login. Body `{ username, password }` (plaintext over TLS; server hashes — legacy `{ passwordHash }` still accepted) → `200 { valid: true, user }` (sanitized) or `401 { valid: false }`. Brute-force throttled on the same IP + username buckets as `/api/auth/login` (shared lock) → `429` when locked. |
@@ -594,11 +672,11 @@ classified below requires an admin session.
 | --- | --- | --- |
 | **public read** | anyone | `GET /api/printers`, `GET /api/analytics/daily`, `GET /api/cameras/health`, `GET /api/maintenance`, `GET /api/maintenance/notifications`, `GET /api/printers/:id/maintenance`, `GET /api/settings/maintenance-intervals`, `GET /api/settings/favicon`, `GET /api/events`, `GET /api/status-light/devices`, `GET /api/status-light/printers/:id`, branding/layout reads |
 | **viewer-gated read** | anyone when `VITE_PUBLIC_VIEWER_MODE=true`, else any session | `GET /api/queue`, `GET /api/maintenance/summary` — public only while the anonymous viewer dashboard is enabled; otherwise a session is required so a non-public deployment doesn't leak queue contents / fleet health |
-| **admin read** | admin only | `GET /api/users`, `GET /api/slicer-keys`, `GET /api/audit-logs`, `GET /api/admin/update-status`, `GET /api/admin/backup/download`, `GET /api/notifications/*`, `GET /api/manager/requests`, `GET /api/settings/saml`, `GET /api/settings/home-assistant*`, `GET /api/status-light/provisioning` |
-| **public mutation** | anyone | `POST /api/queue/submit` (student intake), `POST /api/manager/request`, the auth endpoints above |
+| **admin read** | admin only | `GET /api/users`, `GET /api/slicer-keys`, `GET /api/audit-logs`, `GET /api/admin/update-status`, `GET /api/admin/update/preflight`, `GET /api/admin/update/runs*`, `GET /api/admin/backup/download`, `GET /api/notifications/*`, `GET /api/manager/requests`, `GET /api/settings/home-assistant*`, `GET /api/status-light/provisioning` |
+| **public mutation** | anyone | `POST /api/queue/submit` (student intake), `POST /api/manager/request`, the auth endpoints above, `POST /api/admin/backup/restore-first-run` (first-run only — `409` once an admin password is configured) |
 | **operator** | operator or admin | `POST /api/printers` (create/edit/reorder), `POST /api/printers/:id/command`, `POST /api/queue/:id/printed`, `POST /api/maintenance/:id/complete`, `POST /api/maintenance/notifications/read` |
 | **authed** | any session | `POST /api/audit-logs` (actor is taken from the session, not the body) |
-| **admin** | admin only | `DELETE /api/printers/:id`, `DELETE /api/queue/:id`, `/api/queue/reset`, `/api/analytics/daily/reset`, all `/api/users/*` writes, all `/api/slicer-keys` writes, `/api/notifications/*` writes, `/api/settings/*` writes, `POST /api/admin/update/apply`, `POST /api/admin/backup/restore`, manager request approve/deny/delete |
+| **admin** | admin only | `DELETE /api/printers/:id`, `DELETE /api/queue/:id`, `/api/queue/reset`, `/api/analytics/daily/reset`, all `/api/users/*` writes, all `/api/slicer-keys` writes, `/api/notifications/*` writes, `/api/settings/*` writes, `POST /api/admin/update/apply`, `POST /api/admin/update/rollback`, `POST /api/admin/update/runs/:id/cancel`, `POST /api/admin/backup/restore`, manager request approve/deny/delete |
 
 > **Connection-secret redaction:** `GET /api/printers` and `GET /api/printers/:id`
 > return connection fields (`ipAddress`, `serial`, `url`, `callbackUrl`) only to an
@@ -625,8 +703,9 @@ classified below requires an admin session.
 > fields from the print-request form (`submitterName`, `submitterEmail`, `notes`)
 > only to an operator/admin session. Anonymous, viewer, and student callers get a
 > whitelisted operational view (`id`, `filename`, `fileCount`, `printedStatus`,
-> `status`, `progress`, `estimatedTime`, `timeRemaining`, `filamentUsed`,
-> `priority`, `submittedAt`) with those PII fields omitted, regardless of
+> `status`, `progress`, `estimatedTime`, `timeRemaining`, `estimatedFilament`,
+> `estimateSource`, `filamentUsed`, `priority`, `submittedAt`) with those PII
+> fields omitted, regardless of
 > `VITE_PUBLIC_VIEWER_MODE`. The `stlFileUrl`/`hasFile` fields are also omitted
 > from this public view because the model file itself is now staff-only (see
 > below). The key-gated `GET /api/v1/queue` is unaffected — it returns the full
@@ -653,10 +732,10 @@ Denials return `401` (no/expired session) or `403` (insufficient role).
 > same-origin request — the `Origin` (or `Referer`) hostname must match the
 > request host, else `403 {"error":"Cross-origin request blocked."}`. This is
 > defense-in-depth on top of the `SameSite=Lax` session cookie. It does **not**
-> apply to the **public mutation** endpoints (so the IdP's cross-origin SAML ACS
-> POST and the CORS manager-request API still work), nor to the key-gated
-> `/api/v1` surface. Requests with no `Origin`/`Referer` (curl, server-to-server)
-> are allowed — use `/api/v1` with an API key for automation.
+> apply to the **public mutation** endpoints (so the CORS manager-request API
+> still works), nor to the key-gated `/api/v1` surface. Requests with no
+> `Origin`/`Referer` (curl, server-to-server) are allowed — use `/api/v1` with
+> an API key for automation.
 
 ### Version endpoint
 
@@ -666,12 +745,61 @@ Denials return `401` (no/expired session) or `403` (insufficient role).
 
 Lets a deployed site detect that a newer version has been published and (when a Watchtower sidecar is wired up) apply it in place. Both are **admin only** (cookie session); the apply is CSRF same-origin-gated and audited.
 
+An update is tracked as a durable **run** in `update_runs` (+ `update_run_events`
+for its log), created before the updater is triggered. This matters because the
+update replaces the very container serving these endpoints: the browser is only
+ever a viewer of server-side state, so progress survives closing the tab, and the
+freshly recreated container's watchdog re-attaches to the in-flight run on boot
+and finishes verifying it.
+
 | Method & path | Description |
 |---------------|-------------|
-| `GET /api/admin/update-status` | Compares the running image's baked commit SHA against the latest commit on the tracked GitHub branch (cached ~20 min server-side). Pass `?force=1` (the UI's "Check again" button) to bypass the TTL cache and re-poll GitHub immediately so a just-pushed commit shows up right away. Returns `{ enabled, current, latest, updateAvailable, latestCommittedAt, checkedAt, canApply }`. When `UPDATE_CHECK_REPO` is unset → `{ enabled: false, current }`. On an upstream failure → `{ enabled: true, current, error }`. `canApply` reflects whether `WATCHTOWER_TOKEN` is configured. Cached `no-store`. |
-| `POST /api/admin/update/apply` | Triggers the Watchtower sidecar (`WATCHTOWER_URL` + `WATCHTOWER_TOKEN`) to pull the newer `:latest` images and recreate the app containers. `202 { started: true }` on success — also returned if the request to Watchtower is still outstanding after 5 minutes (a backstop, not a real failure: the trigger already reached Watchtower, which may still be mid-pull or may have already recreated this `web` container). `503` when no updater is configured; `502` only on a genuine connect failure (Watchtower unreachable). Writes an audit-log entry (`action: software.update.apply`). The update itself runs entirely server-side via Watchtower, independent of the client connection — closing the browser tab after the trigger succeeds does not stop or affect it. |
+| `GET /api/admin/update-status` | Compares the running image's baked commit SHA against the newest image **published to Docker Hub** (cached ~20 min server-side): it reads the moving tag (`UPDATE_CHECK_TAG`, default `latest`), then resolves that digest back to the immutable `sha-<12>` tag CI pushed with it, so an update is only reported once it is actually pullable — a commit CI hasn't built yet, or whose build failed, never shows one. Pass `?force=1` (the UI's "Check again" button) to bypass the TTL cache and re-poll the registry immediately so a just-published image shows up right away. Returns `{ enabled, current, latest, updateAvailable, latestCommittedAt, checkedAt, canApply, versionSource, canRollback, rollbackTarget, pinnedVersion, activeRunId }`. When `UPDATE_CHECK_IMAGE` is unset (it defaults to `<IMAGE_PREFIX>/printfarm`) → `{ enabled: false, current }`. `latest` is the 12-char SHA from the published tag and `latestCommittedAt` is that image's push time (the field name predates the switch from the GitHub commit check); the comparison is prefix-based in both directions, so a 12-char tag matches the full 40-char baked SHA. On an upstream failure the run/rollback fields are still returned alongside `error`. `versionSource` is `baked` (a real commit SHA, the only comparable case), `dev`, or `build-id`; `updateAvailable` is never true unless it is `baked`. `pinnedVersion` is set when the running version is the result of a deliberate rollback, so the UI reports "pinned" instead of re-offering the update that was just reverted. Cached `no-store`. |
+| `GET /api/admin/update/preflight` | Runs the pre-flight checks with no side effects. `?kind=update` (default) or `rollback`. Returns `{ ok, blocking, checks: [{ id, label, severity, ok, detail }] }`. See the check table below. |
+| `GET /api/admin/update/runs?limit=20` | Update history, newest first (limit 1–100, default 20). `{ runs: [...] }`. |
+| `GET /api/admin/update/runs/active` | The in-flight run and its log, or `{ run: null, events: [] }`. Polled by the UI every 3 s. |
+| `GET /api/admin/update/runs/:id` | One run plus its event log. `404` when unknown. |
+| `POST /api/admin/update/apply` | Runs pre-flight, creates the run, triggers Watchtower, returns `202 { started: true, runId }` immediately (the watchdog owns the run from there). `409 { error, checks }` when a blocking pre-flight check fails; `409 { error, runId }` when another run is already in flight; `503` when no updater is configured. Audited (`software.update.apply`, and `software.update.succeeded` on completion). |
+| `POST /api/admin/update/rollback` | Body `{ targetVersion }` (7–40 hex chars). Dispatches `.github/workflows/rollback.yml` to re-point the `:latest` tags at that commit's `sha-<12>` images, then triggers Watchtower. `202 { started: true, runId }`. `400` on a malformed SHA, `409` on failed pre-flight or a run already in flight, `503` when `UPDATE_ROLLBACK_TOKEN` is unset. Audited (`software.update.rollback`). |
+| `POST /api/admin/update/runs/:id/cancel` | Abandons a wedged run so the concurrency guard is released. **Does not stop an update already underway** — nothing can, once Watchtower has been triggered. `409` if the run already finished. Audited (`software.update.cancel`). |
 
-Version detection relies on `APP_VERSION` (the git SHA baked into the image by `.github/workflows/deploy.yml`); the one-click apply relies on `docker-compose.deploy.yml` (pulls published images + runs the Watchtower sidecar). Both are documented in `.env.example`.
+**Run states.** `queued` → `retagging` (rollback only) → `triggering` →
+`applying` → `verifying` → one of `succeeded` / `failed` / `timed_out` /
+`cancelled`. Every transition is conditional on the expected current state,
+because the old and new containers can overlap briefly during a Watchtower
+recreate; the loser of a race no-ops rather than double-advancing.
+
+A run only reaches `succeeded` after the new version posts
+`UPDATE_HEALTH_PASSES` (default 3) consecutive `/readyz` passes at least 5 s
+apart. A container that boots on the new SHA and then crash-loops therefore never
+succeeds — it stays in `verifying` until `deadline_at` and lands in `timed_out`,
+which is when the UI offers the rollback.
+
+**Pre-flight checks.** `block` severity is a hard failure with **no override**;
+`warn` is surfaced in the confirm dialog and recorded into `update_runs.preflight`.
+
+| id | Severity | Meaning |
+|----|----------|---------|
+| `version-stamped` | block | The build has a real commit SHA (not a local/dev build) |
+| `db-reachable` | block | Database responds; restarting with it down risks in-flight writes |
+| `updater-reachable` | block | The Watchtower sidecar is listening |
+| `active-prints` | warn | Printers currently printing. The prints keep running — printers print autonomously — but polling and webcams drop for ~a minute |
+| `queue-in-flight` | warn | Unprinted queue jobs (they are in the database and survive) |
+| `backup-fresh` | warn | A backup was recorded in the last 24 h |
+| `migration-forward-only` | warn | Always present — see below |
+| `rollback-available` | info (block for a rollback run) | `UPDATE_ROLLBACK_TOKEN` is configured |
+
+> **Rolling back does not roll back the database.** Migrations
+> (`MIGRATIONS` in `server/postgres.js`) are forward-only and are never
+> un-applied, so an older image must tolerate the newer schema. Each run records
+> the migration high-water mark in `update_runs.schema_version` so the UI can
+> name the exact version being crossed.
+
+`update_runs` / `update_run_events` are **excluded from backup/restore**:
+restoring an old snapshot would otherwise resurrect a stale in-flight row whose
+unique `active_guard` index would then reject every future update.
+
+Version detection relies on `APP_VERSION` (the git SHA baked into the image by `.github/workflows/deploy.yml`, which also publishes an immutable `sha-<12>` tag per service so rollback has a target); the one-click apply relies on `docker-compose.deploy.yml` (pulls published images + runs the Watchtower sidecar, scoped with `--label-enable` so it only ever touches the six app containers, never `db`/`redis`). Rollback additionally needs `UPDATE_ROLLBACK_TOKEN` — a fine-grained GitHub PAT limited to this repo with `Actions: write`, deliberately **not** a registry-write credential, so a compromised web container can only redeploy a commit CI already built rather than push arbitrary images. All documented in `.env.example`.
 
 ### Backup & Restore (admin — Settings → System)
 
@@ -680,16 +808,43 @@ host-to-host migration pair (which only covers queue jobs) — this covers
 every table the app considers data: printers, filament inventory
 (`filament_spools`/`filament_station_assignments`), queue jobs (including
 stored model file bytes), `app_settings` (branding, Home Assistant automation,
-SAML SSO config, staff users, admin credential — all key/value rows there),
+Keycloak SSO config, staff users, admin credential — all key/value rows there),
 slicer/API keys, audit logs, maintenance schedules/events/notifications, and
 network usage. Excluded: `schema_migrations` (app-managed) and
-`poller_health` (ephemeral). Both endpoints are **admin only** (cookie
-session); restore is CSRF same-origin-gated and audited.
+`poller_health` (ephemeral). Download and the authenticated restore are
+**admin only** (cookie session); restore is CSRF same-origin-gated and
+audited. `POST /api/admin/backup/restore-first-run` is the one exception —
+see its row below.
 
 | Method & path | Description |
 |---------------|-------------|
-| `GET /api/admin/backup/download` | Builds the backup in memory and streams it back as `application/zip` (`Content-Disposition: attachment; filename="printfarm-backup-<timestamp>.zip"`). The archive contains `manifest.json` (`{ generatedAt, appVersion, tables: [{ name, rowCount }] }`) plus one `tables/<name>.json` per table (its rows verbatim, with any `bytea` column tagged as `{ __bytea__: base64 }`). |
-| `POST /api/admin/backup/restore` | Body is the raw `.zip` bytes (not multipart — same convention as `PUT /api/v1/queue/:id/file`). Parses the archive, then **truncates and replaces every table present in it** inside one transaction — a bad or partial upload rolls back with no changes committed. `413` if the upload exceeds `BACKUP_UPLOAD_MAX_BYTES` (default 500 MB; the matching nginx `/api/admin/backup/restore` location raises the body cap via `BACKUP_MAX_BODY_SIZE`, default `500m`). `400` for a malformed/unrecognized archive, `500` (with nothing committed) if the restore transaction itself fails. On success, `200 { ok: true, tables: [{ name, rowCount }] }` and an audit-log entry (`action: backup.restore`). Restoring may log the acting admin out if their session row isn't in the archive, and can cause transient poller errors mid-restore — the UI warns about both before confirming. |
+| `GET /api/admin/backup/download` | Streams the archive out as `application/zip` while it is being built (`Content-Disposition: attachment; filename="printfarm-backup-<timestamp>.zip"`, **no `Content-Length`** — the size isn't known until the last byte). Add `?includeFiles=0` (or `=false`) for a metadata-only archive that keeps every row but drops the stored model-file bytes. Audited (`action: backup.download`), which is what the `backup-fresh` update pre-flight reads. A failure mid-stream can only be signalled by aborting the connection, so the browser reports a failed/truncated download. |
+| `POST /api/admin/backup/restore` | Body is the raw `.zip` bytes (not multipart — same convention as `PUT /api/v1/queue/:id/file`). The upload is spooled to a temp file (`BACKUP_TMP_DIR`, default OS temp dir), then applied entry by entry: **every table present in the archive is truncated and replaced** inside one transaction — a bad or partial upload rolls back with no changes committed. Reads both archive formats (see below). `413` if the upload exceeds `BACKUP_UPLOAD_MAX_BYTES` (default 2 GB; the matching nginx `/api/admin/backup/restore` location raises the body cap via `BACKUP_MAX_BODY_SIZE`, default `2048m` — keep the two in sync). `400` for a malformed/unrecognized archive, `500` (with nothing committed) if the restore transaction itself fails. On success, `200 { ok: true, tables: [{ name, rowCount }] }` and an audit-log entry (`action: backup.restore`). Restoring may log the acting admin out if their session row isn't in the archive, and can cause transient poller errors mid-restore — the UI warns about both before confirming. |
+| `POST /api/admin/backup/restore-first-run` | Pre-auth counterpart used by the `/login` first-run setup screen instead of `/api/admin/backup/restore`, identical body/behavior/limits (including the matching `location = /api/admin/backup/restore-first-run` nginx block for the same `BACKUP_MAX_BODY_SIZE` cap) — the only difference is auth: it's reachable with no session, but only while `GET /api/admin/credential` still reports `configured: false`; once an admin password exists it permanently `409`s (`{ error: 'Admin password is already configured' }`), same as `POST /api/admin/credential`. Since the restored archive's `app_settings` table includes `admin_credential`, this brings back that instance's original admin password — the response carries no session cookie, so the caller signs in afterward the normal way. |
+
+**Archive format.** Both endpoints stream, so neither the archive nor any one
+table is ever fully resident — memory stays flat no matter how much data the
+farm holds (the earlier build-it-all-in-RAM version could exhaust the
+container's memory on a farm with real queue history).
+
+*v2* (what is written today, deflate-compressed):
+
+```
+manifest.json                          { formatVersion: 2, generatedAt, appVersion,
+                                         includesFiles, tables: [{ name, rowCount }],
+                                         blobs: { count, bytes } }
+tables/<name>.jsonl                    one JSON object per line — the table's rows
+blobs/<table>/<row>-<column>.bin       one entry per non-null bytea value
+```
+
+A row's `bytea` column holds a marker `{ "__blob__": "blobs/…", "bytes": N, "key": { <pk>: … } }`
+pointing at its entry; the bytes are read out of Postgres (and written back) in
+slices, so a large model file never lands in the process whole. Rows come from
+one `REPEATABLE READ` snapshot, so every table in the archive is from the same
+instant.
+
+*v1* (older archives — still restore, never written): `tables/<name>.json`, one
+JSON array per table, with each `bytea` inlined as `{ "__bytea__": base64 }`.
 
 ### Maintenance (frontend `/api/*`)
 
@@ -962,72 +1117,68 @@ curl -H "X-Api-Key: abc123..." http://printfarm.local/api/v1/printers
 ## SSO sign-in API (`/api/auth`)
 
 A **public** endpoint group (no API key) that runs the OAuth 2.0 Authorization
-Code flow for two providers — **`google`** and **`microsoft`** (Microsoft Entra
-ID / Azure AD) — plus **SAML 2.0** SSO against an external identity provider (the
-dashboard is the Service Provider). On a successful sign-in the callback / ACS
-establishes the **HttpOnly session cookie server-side** and `302`-redirects to the
-dashboard — **no auth token is placed in the URL** (an earlier design handed the
-browser a `?oauth_grant=<token>` param; that was removed because a token in the URL
-leaks into the browser network log, history, access logs, and `Referer` headers,
-where a captured copy could be replayed for a session). OAuth sign-ins are granted
-the read-only **`student`** role; SAML sign-ins take their role from the assertion
-(or keep the stored role of an existing staff account) — see the SAML section below.
+Code flow against **Keycloak** — the sole SSO provider (Google, Microsoft Entra
+ID, and ADFS were removed to keep sign-in to a single, self-hosted identity
+source). On a successful sign-in the callback establishes the **HttpOnly session
+cookie server-side** and `302`-redirects to the dashboard — **no auth token is
+placed in the URL** (an earlier design handed the browser a `?oauth_grant=<token>`
+param; that was removed because a token in the URL leaks into the browser network
+log, history, access logs, and `Referer` headers, where a captured copy could be
+replayed for a session). Keycloak sign-ins are granted the read-only **`student`**
+role.
 
-Configure each provider's client id/secret, optional allowed email domains, and
-(Microsoft only) either the cloud directory **Tenant ID** or an on-prem **AD FS
-authority URL** (the `/adfs` deep link) in **Settings → Sign-in**; nothing is
-baked into the build. Register `<origin>/api/auth/<provider>/callback` as a
-redirect URI with the provider (Google Cloud console / Azure app registration /
-AD FS relying-party); the origin is the configured [SSO public
+Configure the client id/secret, Keycloak server URL, realm, and optional allowed
+email domains in **Settings → Sign-in**; nothing is baked into the build. The
+OIDC endpoints are derived as
+`<server URL>/realms/<realm>/protocol/openid-connect/{auth,token,logout}` — each
+overridable (along with the redirect URI) when an instance uses non-standard
+paths. Register `<origin>/api/auth/keycloak/callback` as the client's redirect URI
+in the Keycloak Admin Console; the origin is the configured [SSO public
 URL](#sso-public-url-apisettingssso-public-url) (Settings → Sign-in), else
 `APP_BASE_URL`, else derived from `X-Forwarded-Proto`/`Host`.
-
-Both providers may be enabled at once — the login page shows a button for each
-enabled provider.
 
 ### Endpoints
 
 #### `GET /api/auth/providers`
 
-Which providers are configured **and** enabled. Drives the login buttons.
+Whether Keycloak is configured **and** enabled. Drives the login button.
 **Public.** Never returns any secret.
 
-**Response `200`** (`saml` reflects whether SAML SSO is enabled + configured):
+**Response `200`:**
 
 ```json
-{ "google": true, "microsoft": false, "saml": false }
+{ "keycloak": true, "keycloakLabel": "" }
 ```
 
 ---
 
-#### `GET /api/auth/:provider/config`
+#### `GET /api/auth/keycloak/config`
 
-Whether a single provider (`google` or `microsoft`) is configured **and**
-enabled. **Public.**
+Whether Keycloak is configured **and** enabled. **Public.**
 
 **Response `200`:** `{ "enabled": true }`
 
 ---
 
-#### `GET /api/auth/:provider/start`
+#### `GET /api/auth/keycloak/start`
 
-Begins the flow for `:provider`. **Public.** `302`-redirects the browser to that
-provider's consent screen (with `scope=openid email profile`, the derived
-`redirect_uri`, and a signed `state` carrying the provider). When the provider is
+Begins the flow. **Public.** `302`-redirects the browser to Keycloak's login page
+(with `scope=openid email profile`, the derived `redirect_uri`, a signed `state`,
+a `nonce`, and `prompt=login` to force a fresh login rather than silently reusing
+an existing Keycloak session on a shared kiosk). When Keycloak is
 disabled/unconfigured it redirects to `/login?oauth_error=not_configured`.
 
 ---
 
-#### `GET /api/auth/:provider/callback`
+#### `GET /api/auth/keycloak/callback`
 
-The provider redirects here with `?code=&state=`. **Public.** Verifies `state`
-(including that it was minted for this provider), exchanges the code at the
-provider's token endpoint (server-to-server with the client secret), requires an
-email (Google `email`; Microsoft falls back to `preferred_username`/`upn`) that
-is not explicitly unverified and (if configured) an allowed domain, then
-**establishes the session cookie** (`Set-Cookie: pf_session`, HttpOnly) and
-`302`-redirects to `/`. The user id is namespaced by provider (`google:<sub>` /
-`microsoft:<sub>`) and the role is `student`.
+Keycloak redirects here with `?code=&state=`. **Public.** Verifies `state`,
+exchanges the code at the token endpoint (server-to-server with the client
+secret), requires an email (`email`, falling back to
+`preferred_username`/`upn`/`unique_name`) that is not explicitly unverified and
+(if configured) an allowed domain, then **establishes the session cookie**
+(`Set-Cookie: pf_session`, HttpOnly) and `302`-redirects to `/`. The user id is
+`keycloak:<sub>` and the role is `student`.
 
 On any failure it `302`-redirects to `/login?oauth_error=<code>` where `<code>`
 is one of `not_configured`, `denied`, `exchange_failed`, `unverified_email`, or
@@ -1035,71 +1186,21 @@ is one of `not_configured`, `denied`, `exchange_failed`, `unverified_email`, or
 
 ---
 
+#### `GET /launch`
+
+**Public.** Friendly deep-link alias for the SSO portal — a one-click sign-in.
+`302`-redirects to `GET /api/auth/keycloak/start`. Intended as the `href` for a
+"Print Farm" button on an IdP portal page (`https://<this-host>/launch`). No body
+or query params.
+
+---
+
 #### `POST /api/auth/verify`
 
 **Deprecated / inert.** This endpoint verified the old `?oauth_grant=` hand-off
-token. The callback and SAML ACS now establish the session cookie directly and no
-longer mint a grant, so nothing produces a token for this endpoint to verify. It
-is retained only for backward compatibility and returns `401` in normal operation.
-
----
-
-### SAML 2.0 SSO endpoints
-
-The dashboard is the SAML **Service Provider**. Configure the IdP in **Settings →
-SSO Configuration** (`/api/settings/saml`). The AuthnRequest uses the
-**HTTP-Redirect** binding (DEFLATE + base64); the IdP returns the response via the
-**HTTP-POST** binding to the ACS. The assertion's enveloped XML signature is
-verified against the stored IdP certificate (the cert embedded in the assertion is
-ignored), the audience must match the SP entity ID, the recipient must match the
-ACS URL, the validity window is enforced, and `InResponseTo` must match the
-AuthnRequest id (carried in a signed `RelayState`).
-
-#### `GET /api/auth/saml/metadata`
-
-**Public.** Returns the SP metadata XML (`application/samlmetadata+xml`) generated
-from the saved SP entity ID + ACS URL (falling back to the resolved public origin
-— see [SSO public URL](#sso-public-url-apisettingssso-public-url) — when left
-blank). Import this into the IdP to register the dashboard as an SP.
-
----
-
-#### `GET /api/auth/saml/start`
-
-**Public.** Begins SAML sign-in: `302`-redirects the browser to the IdP SSO URL
-with a DEFLATE+base64 `SAMLRequest` and a signed `RelayState`. Redirects to
-`/login?oauth_error=not_configured` when SAML is disabled/unconfigured.
-
----
-
-#### `GET /launch`
-
-**Public.** Friendly deep-link alias for the SSO portal — a one-click,
-SP-initiated SAML sign-in. `302`-redirects to `GET /api/auth/saml/start`, which
-takes the browser through the IdP and lands the signed-in user on the dashboard.
-Intended as the `href` for a "Print Farm" button on the IdP portal page
-(`https://<this-host>/launch`). No body or query params.
-
----
-
-#### `POST /api/auth/saml/acs`
-
-**Public.** The Assertion Consumer Service. The IdP posts
-`application/x-www-form-urlencoded` with `SAMLResponse` (base64 XML) and
-`RelayState`. Verifies the assertion, then resolves the user:
-
-- **Existing staff account** (matched by username = asserted email): admitted with
-  its **stored** role (the assertion cannot escalate it).
-- **Unknown user + Auto Provision Users on:** admitted with the asserted `role`
-  (validated to `admin`/`operator`/`viewer`/`student`; anything else →
-  `student`).
-- **Unknown user + Auto Provision Users off:** rejected with
-  `/login?oauth_error=saml_not_provisioned`.
-
-On success **establishes the session cookie** (`Set-Cookie: pf_session`, HttpOnly;
-user id `saml:<email>`) and `302`-redirects to `/` — no token in the URL. On a
-verification failure redirects to `/login?oauth_error=saml_invalid` (or
-`not_configured`/`denied`).
+token. The callback now establishes the session cookie directly and no longer
+mints a grant, so nothing produces a token for this endpoint to verify. It is
+retained only for backward compatibility and returns `401` in normal operation.
 
 ## Website access mode (`/api/settings/public-viewer`)
 
@@ -1220,11 +1321,20 @@ Also rate-limited per client IP (default 10 requests/hour, tunable via
 `PUBLIC_INTAKE_MAX_PER_WINDOW` / `PUBLIC_INTAKE_WINDOW_SECONDS`); over the limit
 returns **`429`** with a `Retry-After` header, checked before the window check.
 
+**Print-time / filament estimate.** The uploaded model is estimated before the row
+is inserted, and the result is stored on the job as `estimatedTime` (minutes),
+`estimatedFilament` (grams) and `estimateSource` — see
+[Print-time / filament estimate](#print-time--filament-estimate) under
+`/api/v1/queue` for the field semantics. The request body and response shape are
+unchanged: the estimate is derived server-side from the file, never accepted from
+the client. Estimation is best-effort — an unparseable, unsupported or oversized
+file yields `estimateSource: "none"` and the submission still succeeds.
+
 ## SSO public URL (`/api/settings/sso-public-url`)
 
 Admin override for the site's own public origin, used as the top-priority tier
-when the server builds OAuth `redirect_uri` / SAML `spEntityId`+`acsUrl` (see the
-OAuth and SAML sign-in sections). Resolution order: **(1)** this setting, stored
+when the server builds the OAuth `redirect_uri` (see the SSO sign-in section
+above). Resolution order: **(1)** this setting, stored
 in `app_settings` under `sso_public_url` → **(2)** the `APP_BASE_URL` env var →
 **(3)** the `X-Forwarded-Proto`/`X-Forwarded-Host`/`Host` request headers. Set
 it when SSO logins land on the wrong host because the reverse proxy doesn't
@@ -1369,29 +1479,20 @@ updated rule. `404` if the id is unknown.
 
 Deletes a rule. **Response `204`**; `404` if the id is unknown.
 
-## Sign-in settings (`/api/settings/oauth/:provider`)
+## Sign-in settings (`/api/settings/oauth/keycloak`)
 
 Admin-only in the UI (client-side session guard, like
-`/api/settings/integrations`). Stores each provider's OAuth config in
-`app_settings` (`:provider` is `google`, `microsoft`, or `adfs`). `tenant` and
-`authority` are Microsoft-only; they are accepted for any provider but ignored
-where unused.
+`/api/settings/integrations`). Stores the Keycloak OAuth config in `app_settings`.
+Both `authority` (the Keycloak server base URL, e.g.
+`https://keycloak.example.com`) and `realm` are **required** — the provider is not
+considered configured without them, since the OIDC endpoints are derived as
+`<authority>/realms/<realm>/protocol/openid-connect/{auth,token,logout}`.
+`authorizeEndpoint`/`tokenEndpoint`/`logoutEndpoint` may each be overridden
+explicitly when an instance uses non-standard paths. Register
+`<origin>/api/auth/keycloak/callback` as the redirect URI in the Keycloak Admin
+Console (realm → Clients).
 
-For Microsoft, two modes are supported:
-- **Cloud (Entra ID):** leave `authority` blank and set `tenant` (a directory GUID,
-  or `common`). Endpoints are `https://login.microsoftonline.com/<tenant>/oauth2/v2.0/*`.
-- **On-prem AD FS:** set `authority` to the AD FS base URL (the `/adfs` deep link,
-  e.g. `https://sso.example.com/adfs`). Endpoints become `<authority>/oauth2/authorize`
-  and `<authority>/oauth2/token`. `authority` takes precedence over `tenant`.
-
-For `adfs`, `authority` is **required** (unlike Microsoft where it is optional) —
-the provider is not considered configured without it, since all endpoints are
-derived as `<authority>/oauth2/{authorize,token}`. `tenant` is ignored. The
-registered callback path is `/api/auth/oauth2_redirect` (not the default
-`/api/auth/adfs/callback` pattern). All config is stored in the database via
-Settings → Sign-in → ADFS.
-
-#### `GET /api/settings/oauth/:provider`
+#### `GET /api/settings/oauth/keycloak`
 
 **Response `200`** — the client secret is **never** returned, only whether one
 is stored:
@@ -1400,14 +1501,14 @@ is stored:
 {
   "enabled": true,
   "clientId": "xxxx",
-  "tenant": "00000000-0000-0000-0000-000000000000",
-  "authority": "",
+  "authority": "https://keycloak.example.com",
+  "realm": "printfarm",
   "allowedDomains": ["school.edu"],
   "hasClientSecret": true
 }
 ```
 
-#### `PUT /api/settings/oauth/:provider`
+#### `PUT /api/settings/oauth/keycloak`
 
 **Request body:**
 
@@ -1416,8 +1517,8 @@ is stored:
   "enabled": true,
   "clientId": "xxxx",
   "clientSecret": "secret-value",
-  "tenant": "00000000-0000-0000-0000-000000000000",
-  "authority": "https://sso.example.com/adfs",
+  "authority": "https://keycloak.example.com",
+  "realm": "printfarm",
   "allowedDomains": ["school.edu"]
 }
 ```
@@ -1425,88 +1526,6 @@ is stored:
 A blank/omitted `clientSecret` **keeps** the stored one (so the form can
 round-trip without re-entering it); a non-empty value replaces it. Returns the
 same redacted shape as `GET`.
-
-**SSO providers are independent:** Google, Microsoft/AD FS, and SAML can each be
-enabled at the same time. Saving one provider no longer disables the others — the
-login screen shows one sign-in button per enabled provider.
-
-## SSO configuration (`/api/settings/saml`)
-
-Admin-only in the UI (client-side session guard, like `/api/settings/oauth`).
-Stores the SAML SSO config in `app_settings` (`saml_sso`) and applies it on the
-next sign-in with no restart. The IdP certificate is a **public** signing cert, so
-it is returned in full (unlike the OAuth client secret).
-
-#### `GET /api/settings/saml`
-
-**Response `200`:**
-
-```json
-{
-  "enabled": false,
-  "idpEntityId": "https://idp.example.com",
-  "idpSsoUrl": "https://idp.example.com/adfs/ls/",
-  "idpCertificate": "-----BEGIN CERTIFICATE-----\n...",
-  "spEntityId": "",
-  "acsUrl": "",
-  "autoProvisionUsers": false,
-  "updatedAt": "2026-06-18T00:00:00.000Z",
-  "defaultSpEntityId": "https://<origin>/api/auth/saml/metadata",
-  "defaultAcsUrl": "https://<origin>/api/auth/saml/acs",
-  "effectiveSpEntityId": "https://<origin>/api/auth/saml/metadata",
-  "effectiveAcsUrl": "https://<origin>/api/auth/saml/acs"
-}
-```
-
-`spEntityId`/`acsUrl` fall back to the origin-derived `default*` values (which the
-metadata endpoint advertises) when left blank; `effective*` is the resolved value.
-
-#### `PUT /api/settings/saml`
-
-**Request body:**
-
-```json
-{
-  "enabled": true,
-  "idpEntityId": "https://idp.example.com",
-  "idpSsoUrl": "https://idp.example.com/adfs/ls/",
-  "idpCertificate": "-----BEGIN CERTIFICATE-----\n...",
-  "spEntityId": "",
-  "acsUrl": "",
-  "autoProvisionUsers": false
-}
-```
-
-Validates before saving: any provided URL must be absolute http(s) (`400`
-otherwise); the certificate, if provided, must be a valid X.509 PEM (`400`
-otherwise); enabling requires both an IdP SSO URL and certificate (`400`
-otherwise). Stamps `updatedAt`, writes an audit log, and — when enabling —
-disables the OAuth providers. Returns the same shape as `GET`.
-
-#### `POST /api/settings/saml/test`
-
-Validates the submitted (or, where blank, stored) `idpSsoUrl` + `idpCertificate`
-and probes the IdP SSO URL for reachability (5 s timeout; any HTTP response counts
-as reachable). Does **not** save.
-
-**Request body** (optional — falls back to stored values):
-
-```json
-{ "idpSsoUrl": "https://idp.example.com/adfs/ls/", "idpCertificate": "-----BEGIN CERTIFICATE-----\n..." }
-```
-
-**Response `200`:**
-
-```json
-{
-  "ok": true,
-  "checks": [
-    { "label": "IdP SSO URL is a valid http(s) URL", "ok": true },
-    { "label": "IdP certificate is a valid X.509 certificate", "ok": true },
-    { "label": "IdP SSO URL is reachable", "ok": true, "detail": "HTTP 200" }
-  ]
-}
-```
 
 ## Operational endpoints
 
@@ -1556,6 +1575,11 @@ Prometheus exposition of the web tier's own request metrics
 `/metrics` on the public site; Prometheus scrapes `web:5173/metrics` directly
 over the compose network. Carries no secrets. Distinct from the `exporter`
 service, which exposes the print-farm *data* metrics (`printfarm_*`) from Postgres.
+
+In the **single-container** build there is no nginx to 404 it and the web
+listener *is* the public port, so setting `METRICS_LISTEN_PORT` (default `9181`
+there) moves this endpoint onto its own listener — `/metrics` on the public port
+then returns `404` like any other unknown path.
 
 Every response (on all endpoints) carries an `X-Request-Id` header, echoed in the
 server's access log line (`reqId`) for correlation; a client may supply its own

@@ -35,6 +35,24 @@ const BAMBU_FILAMENT_PRESETS = {
   PVA: { idx: 'GFS99', type: 'PVA', min: 190, max: 220 },
 };
 
+// Bambu's built-in calibration routines are a single MQTT `calibration`
+// command whose `option` field is a bitmask of which routines to run
+// (pybambu / OpenBambuAPI: bit1 bed level, bit2 vibration compensation,
+// bit3 motor noise cancellation; bit0 unused). Only these named routines are
+// accepted — the caller never supplies the raw integer, so a stale or hostile
+// client can't set an undocumented bit.
+//
+// The bit meanings are documented for the A1/P1 series and have NOT been
+// verified against the H2 series on this farm — like BAMBU_FILAMENT_PRESETS
+// above, they may need per-model tuning. H2D dual-nozzle offset calibration is
+// deliberately absent: it is a different command, not a bit here.
+const BAMBU_CALIBRATION_OPTIONS = {
+  bed_level: 1 << 1, // 2
+  vibration: 1 << 2, // 4
+  motor_noise: 1 << 3, // 8
+  full: (1 << 1) | (1 << 2) | (1 << 3), // 14
+};
+
 // Map a heater target to the M-code Bambu accepts over `gcode_line`.
 function buildBambuTemperatureGcode(heater, target, nozzleIndex = 0) {
   const value = Math.round(Number(target));
@@ -164,6 +182,24 @@ export function buildBambuCommandPayload(command, params = {}, profile) {
     };
   }
 
+  if (command === 'calibrate') {
+    const routine = String(params.routine || '');
+    // hasOwn, not a bare lookup: `__proto__`/`toString` resolve off the
+    // prototype chain and would sail past an `=== undefined` check, publishing
+    // a calibration command with a garbage `option` to the printer.
+    if (!Object.hasOwn(BAMBU_CALIBRATION_OPTIONS, routine)) {
+      throw new Error(`Unsupported calibration routine: ${params.routine}`);
+    }
+    const option = BAMBU_CALIBRATION_OPTIONS[routine];
+    return {
+      print: {
+        command: 'calibration',
+        option,
+        sequence_id: sequenceId,
+      },
+    };
+  }
+
   if (command === 'set_airduct') {
     // The H2 series routes chamber air through a mode-based "air duct" system
     // rather than an individually-addressable filter fan, so the activated-carbon
@@ -254,6 +290,33 @@ export function buildBambuCommandPayload(command, params = {}, profile) {
     };
   }
 
+  if (command === 'refresh_rfid') {
+    // ams_get_rfid: ask the AMS to physically re-scan the tag in one slot,
+    // for when the initial read came back garbled or empty. `trayId` is the
+    // global tray id, split the same way set_filament splits it.
+    //
+    // Note Bambu names the slot field `slot_id` for this command, not
+    // `tray_id` as everywhere else (bambuddy bambu_mqtt.py:4716-4752).
+    //
+    // The printer can only spin a spool past the reader with the filament
+    // retracted, so this is a no-op while something is loaded. The caller is
+    // expected to have checked — the frontend gates the button on the poller's
+    // per-slot `active` flag — since MQTT gives us no way to find out here.
+    const target = Number(params.trayId);
+    if (!Number.isFinite(target) || target < 0 || target > 255) {
+      throw new Error('Filament tray target is out of range');
+    }
+    const isExternal = target === 254;
+    return {
+      print: {
+        command: 'ams_get_rfid',
+        ams_id: isExternal ? 255 : Math.floor(target / 4),
+        slot_id: isExternal ? 254 : target % 4,
+        sequence_id: sequenceId,
+      },
+    };
+  }
+
   const action = BAMBU_PRINT_ACTIONS[command];
   if (!action) {
     throw new Error(`Unsupported command: ${command}`);
@@ -273,7 +336,12 @@ export function sendBambuCommand(printer, command, params) {
     throw new Error('Bambu printer is missing its serial number');
   }
 
-  if (command === 'load_filament' || command === 'unload_filament' || command === 'set_filament') {
+  if (
+    command === 'load_filament' ||
+    command === 'unload_filament' ||
+    command === 'set_filament' ||
+    command === 'refresh_rfid'
+  ) {
     // Publishing is QoS 0 with no ack from the printer, so a successful publish
     // here does not prove the firmware applied it. Logging the exact payload
     // lets it be diffed against a packet capture of Bambu Studio's own command

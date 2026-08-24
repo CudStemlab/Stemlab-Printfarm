@@ -12,6 +12,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"printfarm/internal/printestimate"
 )
 
 // queue.go ports the public print-request intake (POST /api/queue/submit) and
@@ -260,9 +262,25 @@ func handleQueueSubmit(w http.ResponseWriter, req *http.Request) {
 	if noteText != "" {
 		noteParts = append(noteParts, noteText)
 	}
+	// Estimate print time and filament from the uploaded model. Best-effort: an
+	// unparseable or oversized file leaves the old quantity-derived placeholder
+	// in place and records source 'none', exactly like a job submitted before
+	// this existed. A parse failure must never fail a submission.
 	estimatedTime := quantity * 60
 	if estimatedTime < 30 {
 		estimatedTime = 30
+	}
+	var filamentGrams *float64
+	estimateSource := printestimate.SourceNone
+	if estimate := printestimate.FromModel(
+		file.content, file.filename, quantity, printestimate.ConfigFromEnv(),
+	); estimate != nil {
+		estimatedTime = estimate.Minutes
+		estimateSource = estimate.Source
+		if estimate.HasGrams {
+			grams := estimate.Grams
+			filamentGrams = &grams
+		}
 	}
 
 	idSeed := studentID
@@ -280,17 +298,19 @@ func handleQueueSubmit(w http.ResponseWriter, req *http.Request) {
 	}
 
 	job := queueSubmission{
-		id:            id,
-		filename:      file.filename,
-		fileCount:     quantity,
-		submitterName: submitterName,
-		notes:         strings.Join(noteParts, " | "),
-		submittedAt:   submittedAt,
-		priority:      priority,
-		estimatedTime: estimatedTime,
-		fileContent:   file.content,
-		fileMime:      file.mimeType,
-		fileSize:      len(file.content),
+		id:             id,
+		filename:       file.filename,
+		fileCount:      quantity,
+		submitterName:  submitterName,
+		notes:          strings.Join(noteParts, " | "),
+		submittedAt:    submittedAt,
+		priority:       priority,
+		estimatedTime:  estimatedTime,
+		filamentGrams:  filamentGrams,
+		estimateSource: estimateSource,
+		fileContent:    file.content,
+		fileMime:       file.mimeType,
+		fileSize:       len(file.content),
 	}
 	if job.filename == "" {
 		job.filename = "Submission " + id
@@ -512,6 +532,12 @@ type queueSubmission struct {
 	fileContent    []byte
 	fileMime       string
 	fileSize       int
+	// Print-time / filament estimate derived from the uploaded model
+	// (internal/printestimate). filamentGrams is nil when the file yielded no
+	// usable weight; estimateSource is always set — SourceNone when nothing
+	// parsed, which is what keeps the backfill worker from retrying it.
+	filamentGrams  *float64
+	estimateSource string
 }
 
 func insertQueueSubmission(ctx context.Context, job queueSubmission) error {
@@ -523,8 +549,9 @@ func insertQueueSubmission(ctx context.Context, job queueSubmission) error {
     INSERT INTO queue_jobs (
       id, filename, file_count, submitter_name, submitter_email, notes,
       submitted_at, priority, estimated_time, form_type, printed_status,
-      file_content, file_mime, file_size_bytes
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 0, $11, $12, $13)
+      file_content, file_mime, file_size_bytes,
+      estimated_filament_grams, estimate_source
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 0, $11, $12, $13, $14, $15)
     ON CONFLICT (id) DO UPDATE SET
       filename = EXCLUDED.filename,
       file_count = EXCLUDED.file_count,
@@ -537,12 +564,99 @@ func insertQueueSubmission(ctx context.Context, job queueSubmission) error {
       file_content = EXCLUDED.file_content,
       file_mime = EXCLUDED.file_mime,
       file_size_bytes = EXCLUDED.file_size_bytes,
+      estimated_filament_grams = EXCLUDED.estimated_filament_grams,
+      estimate_source = EXCLUDED.estimate_source,
       deleted_at = NULL,
       updated_at = NOW();`,
 		job.id, job.filename, job.fileCount, job.submitterName, job.submitterEmail, notes,
 		job.submittedAt, job.priority, job.estimatedTime, queueFormType,
-		job.fileContent, job.fileMime, job.fileSize)
+		job.fileContent, job.fileMime, job.fileSize,
+		job.filamentGrams, estimateSourceOrNil(job.estimateSource))
 	return err
+}
+
+// estimateSourceOrNil keeps the column NULL rather than empty-string when a
+// caller built a submission without running the estimator — NULL is exactly what
+// the backfill worker looks for.
+func estimateSourceOrNil(source string) any {
+	if source == "" {
+		return nil
+	}
+	return source
+}
+
+// ── queue estimate backfill ──────────────────────────────────────────────────
+// Twins of the helpers in server/postgres.js; see server/queueEstimateBackfill.js
+// for why an unestimatable row is stamped SourceNone rather than left NULL.
+
+type queueEstimateCandidate struct {
+	id        string
+	filename  string
+	fileCount int
+	fileSize  int64
+}
+
+// listQueueJobsNeedingEstimate returns jobs still awaiting an estimate.
+// Deliberately does not select file_content — the bytes are streamed per job, so
+// resident memory stays a small fixed window rather than scaling with the batch.
+func listQueueJobsNeedingEstimate(ctx context.Context, limit, maxBytes int) ([]queueEstimateCandidate, error) {
+	rows, err := dbPool.Query(ctx, `
+    SELECT id, filename, file_count, COALESCE(file_size_bytes, 0)
+    FROM queue_jobs
+    WHERE form_type = $1
+      AND deleted_at IS NULL
+      AND estimate_source IS NULL
+      AND COALESCE(file_size_bytes, 0) > 0
+      AND COALESCE(file_size_bytes, 0) <= $2
+    ORDER BY submitted_at ASC NULLS LAST, created_at ASC
+    LIMIT $3;`, queueFormType, maxBytes, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []queueEstimateCandidate
+	for rows.Next() {
+		var candidate queueEstimateCandidate
+		if err := rows.Scan(&candidate.id, &candidate.filename, &candidate.fileCount, &candidate.fileSize); err != nil {
+			return nil, err
+		}
+		out = append(out, candidate)
+	}
+	return out, rows.Err()
+}
+
+// updateQueueJobEstimate records a backfilled estimate. minutes is nil for a file
+// that could not be parsed, leaving whatever time the row already had;
+// estimate_source is always written, which is what stops the worker from picking
+// the same unparseable row up forever.
+func updateQueueJobEstimate(ctx context.Context, id string, minutes *int, grams *float64, source string) error {
+	_, err := dbPool.Exec(ctx, `
+    UPDATE queue_jobs
+    SET estimated_time = COALESCE($2, estimated_time),
+        estimated_filament_grams = $3,
+        estimate_source = $4,
+        updated_at = NOW()
+    WHERE id = $1
+      AND deleted_at IS NULL;`, id, minutes, grams, source)
+	return err
+}
+
+// markQueueJobsUnestimatable dismisses every row with no stored file (or one too
+// large to parse) in a single statement, so the worker never pages through them.
+func markQueueJobsUnestimatable(ctx context.Context, maxBytes int) (int64, error) {
+	tag, err := dbPool.Exec(ctx, `
+    UPDATE queue_jobs
+    SET estimate_source = 'none', updated_at = NOW()
+    WHERE form_type = $1
+      AND deleted_at IS NULL
+      AND estimate_source IS NULL
+      AND (COALESCE(file_size_bytes, 0) = 0 OR COALESCE(file_size_bytes, 0) > $2);`,
+		queueFormType, maxBytes)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
 }
 
 type queueFileMeta struct {

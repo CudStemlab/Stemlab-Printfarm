@@ -1,13 +1,8 @@
-// OAuth (SSO) sign-in — Google, Microsoft Entra ID, and Satit-M Chula ADFS.
-// The dashboard auth is cookieless, so the server runs the Authorization Code
-// flow and hands the authenticated identity back to the client as a short-lived,
-// HMAC-signed grant token in a URL param (`?oauth_grant=`). The client verifies
-// it here (server-side) before creating a session — the same hand-off shape as
-// the slicer grant. See server/oauthGrant.js.
+// OAuth (SSO) sign-in — Keycloak. The dashboard auth is cookieless, so the
+// server runs the Authorization Code flow and establishes the session cookie
+// directly on a successful callback (see server/app.js).
 
 import type { UserRole } from './usersApi';
-
-export type OAuthProvider = 'google' | 'microsoft' | 'adfs';
 
 export interface OAuthUser {
   id: string;
@@ -16,49 +11,42 @@ export interface OAuthUser {
   role: UserRole;
 }
 
-// Which providers are configured + enabled. Drives the sign-in buttons on the
-// login page.
+// Whether Keycloak sign-in is configured + enabled. Drives the sign-in button
+// on the login page.
 export interface EnabledOAuthProviders {
-  google: boolean;
-  microsoft: boolean;
-  adfs: boolean;
-  saml: boolean;
-  googleLabel: string;
-  microsoftLabel: string;
-  adfsLabel: string;
-  samlLabel: string;
+  keycloak: boolean;
+  keycloakLabel: string;
 }
 
-// Admin-facing config shape for the Settings → Sign-in form. The client secret is
-// never returned — only whether one is stored. `tenant` and `authority` are
-// Microsoft-only: `tenant` for the Microsoft cloud (Entra ID), `authority` for an
-// on-prem AD FS base URL (e.g. https://host/adfs) when not using the cloud.
+// Admin-facing config shape for the Settings → Sign-in form. The client secret
+// is never returned — only whether one is stored. `authority` is the Keycloak
+// server base URL; `realm` is the Keycloak realm — combined to derive the
+// OIDC endpoints below.
 export interface OAuthSettings {
   enabled: boolean;
   clientId: string;
-  tenant: string;
   authority: string;
+  realm: string;
   allowedDomains: string[];
   hasClientSecret: boolean;
   displayName: string;
-  // ADFS: full redirect URI pre-registered with the IdP. Used verbatim so the
+  // Full redirect URI pre-registered with the client. Used verbatim so the
   // correct URL is sent even behind a TLS-terminating proxy.
   redirectUri: string;
-  // ADFS: explicit endpoint URLs. When set, used verbatim instead of deriving
-  // from authority (useful when the IdP uses non-standard paths).
+  // Explicit endpoint URLs. When set, used verbatim instead of deriving from
+  // authority + realm (useful when an instance uses non-standard paths).
   authorizeEndpoint: string;
   tokenEndpoint: string;
   logoutEndpoint: string;
   metadataUrl: string;
   jwksUri: string;
-  relyingPartyId: string;
 }
 
 export interface OAuthSettingsInput {
   enabled: boolean;
   clientId: string;
-  tenant: string;
   authority: string;
+  realm: string;
   // Blank means "keep the stored secret"; a value replaces it.
   clientSecret: string;
   allowedDomains: string[];
@@ -69,7 +57,6 @@ export interface OAuthSettingsInput {
   logoutEndpoint: string;
   metadataUrl: string;
   jwksUri: string;
-  relyingPartyId: string;
 }
 
 interface MutationResult {
@@ -86,35 +73,26 @@ async function readError(response: Response): Promise<string | undefined> {
   }
 }
 
-// Which SSO buttons to show on the login page.
+// Whether to show the "Sign in with Keycloak" button on the login page.
 export async function fetchEnabledOAuthProviders(): Promise<EnabledOAuthProviders> {
   try {
     const response = await fetch('/api/auth/providers', { cache: 'no-store' });
     if (!response.ok) {
-      return { google: false, microsoft: false, adfs: false, saml: false };
+      return { keycloak: false, keycloakLabel: '' };
     }
     const data = (await response.json()) as Partial<EnabledOAuthProviders>;
     return {
-      google: Boolean(data.google),
-      microsoft: Boolean(data.microsoft),
-      adfs: Boolean(data.adfs),
-      saml: Boolean(data.saml),
-      googleLabel: typeof data.googleLabel === 'string' ? data.googleLabel : '',
-      microsoftLabel: typeof data.microsoftLabel === 'string' ? data.microsoftLabel : '',
-      adfsLabel: typeof data.adfsLabel === 'string' ? data.adfsLabel : '',
-      samlLabel: typeof data.samlLabel === 'string' ? data.samlLabel : '',
+      keycloak: Boolean(data.keycloak),
+      keycloakLabel: typeof data.keycloakLabel === 'string' ? data.keycloakLabel : '',
     };
   } catch {
-    return {
-      google: false, microsoft: false, adfs: false, saml: false,
-      googleLabel: '', microsoftLabel: '', adfsLabel: '', samlLabel: '',
-    };
+    return { keycloak: false, keycloakLabel: '' };
   }
 }
 
-// Verify the grant token carried back from the OAuth callback. The grant carries
-// its own provider, so this endpoint is provider-agnostic. Returns the user to
-// sign in as, or null when the token is missing/forged/expired.
+// Verify the grant token carried back from the OAuth callback. Deprecated —
+// the callback now establishes the session cookie directly, so nothing mints
+// a token for this to verify; retained for backward compatibility.
 export async function verifyOAuthGrant(token: string): Promise<OAuthUser | null> {
   try {
     const response = await fetch('/api/auth/verify', {
@@ -132,20 +110,17 @@ export async function verifyOAuthGrant(token: string): Promise<OAuthUser | null>
   }
 }
 
-// Admin config read (Settings → Sign-in), per provider.
-export async function fetchOAuthSettings(provider: OAuthProvider): Promise<OAuthSettings> {
-  const response = await fetch(`/api/settings/oauth/${provider}`, { cache: 'no-store' });
+// Admin config read (Settings → Sign-in → Keycloak).
+export async function fetchOAuthSettings(): Promise<OAuthSettings> {
+  const response = await fetch('/api/settings/oauth/keycloak', { cache: 'no-store' });
   if (!response.ok) {
     throw new Error((await readError(response)) ?? 'Unable to load sign-in settings.');
   }
   return response.json() as Promise<OAuthSettings>;
 }
 
-export async function saveOAuthSettings(
-  provider: OAuthProvider,
-  input: OAuthSettingsInput,
-): Promise<OAuthSettings> {
-  const response = await fetch(`/api/settings/oauth/${provider}`, {
+export async function saveOAuthSettings(input: OAuthSettingsInput): Promise<OAuthSettings> {
+  const response = await fetch('/api/settings/oauth/keycloak', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(input),

@@ -32,12 +32,21 @@ import {
   ArrowDownToLine,
   ArrowUpFromLine,
   Pencil,
+  ScanLine,
   AlertCircle,
   Eye,
   EyeOff,
+  SlidersHorizontal,
+  OctagonAlert,
+  RotateCcw,
+  ExternalLink,
 } from 'lucide-react';
 import {
   MOTION_STEP_OPTIONS,
+  PRINTER_CALIBRATIONS,
+  fetchPrinterCalibrationObjects,
+  printerSupportsCalibration,
+  runPrinterCalibration,
   buildPrinterWebcamPlayerUrl,
   buildPrinterWebcamMjpegUrl,
   buildPrinterWebcamSnapshotUrl,
@@ -57,6 +66,8 @@ import {
   printerSupportsCoolingControl,
   printerSupportsFilamentControl,
   printerSupportsFilamentEdit,
+  printerSupportsRfidRefresh,
+  refreshPrinterFilamentTag,
   setPrinterFilament,
   FILAMENT_MATERIALS,
   FILAMENT_VENDORS,
@@ -64,13 +75,17 @@ import {
   printerSupportsLiveMjpeg,
   printerSupportsMotionControl,
   printerSupportsTemperatureControl,
+  printerSupportsEmergencyStop,
   printerSupportsWebcamStream,
   sendPrinterCommand,
+  sendPrinterEmergencyStop,
+  sendPrinterFirmwareRestart,
   setPrinterAirFilter,
   setPrinterFanSpeed,
   setPrinterLight,
   setPrinterTemperature,
   unloadPrinterFilament,
+  type CalibrationRoutine,
   type FanDescriptor,
   type MotionAxis,
 } from '../lib/printerProfiles';
@@ -94,6 +109,16 @@ import {
   DialogHeader,
   DialogTitle,
 } from '../components/ui/dialog';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '../components/ui/alert-dialog';
 import { toast } from 'sonner';
 import { fetchPrinter, removePrinter, savePrinter } from '../lib/printersApi';
 import { useAuth } from '../contexts/AuthContext';
@@ -325,6 +350,16 @@ export function PrinterDetail() {
   const { user } = useAuth();
   const [printer, setPrinter] = useState<Printer | null>(null);
   const [commandInFlight, setCommandInFlight] = useState<'pause' | 'resume' | 'cancel' | null>(null);
+  // Emergency stop is confirm-gated (it halts the firmware, not just the job) and
+  // tracked apart from commandInFlight so it stays clickable while a pause or
+  // cancel is still in flight — an e-stop must never wait on a graceful command.
+  const [estopConfirmOpen, setEstopConfirmOpen] = useState(false);
+  const [estopInFlight, setEstopInFlight] = useState(false);
+  // Set once an e-stop lands so the recovery (firmware restart) button appears
+  // even if the poller hasn't reported the shutdown state yet. Cleared on a
+  // successful restart.
+  const [estopped, setEstopped] = useState(false);
+  const [firmwareRestartInFlight, setFirmwareRestartInFlight] = useState(false);
   // Snapmaker reports its cavity LED via Moonraker, so the displayed state is
   // synced from the hardware below. Bambu has no HTTP readback, so for it this
   // just tracks the last command sent.
@@ -354,6 +389,18 @@ export function PrinterDetail() {
   // in-flight key (e.g. "x+", "home") disables the pad while a command runs.
   const [motionStep, setMotionStep] = useState<number>(10);
   const [motionInFlight, setMotionInFlight] = useState<string | null>(null);
+  // Calibration. `pendingCalibration` holds the routine awaiting confirmation;
+  // `calibrationInFlight` is the running routine's id. There is no completion
+  // signal from either firmware, so `calibrationClearTimer` re-enables the card
+  // after the routine's estimated duration — see runCalibration.
+  const [isCalibrationOpen, setIsCalibrationOpen] = useState(false);
+  const [pendingCalibration, setPendingCalibration] = useState<CalibrationRoutine | null>(null);
+  const [calibrationInFlight, setCalibrationInFlight] = useState<string | null>(null);
+  const [calibrationStartedAt, setCalibrationStartedAt] = useState<number | null>(null);
+  const calibrationClearTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Klipper objects this firmware defines, used to disable calibration buttons
+  // whose macro isn't present. null = discovery unavailable, treat all as valid.
+  const [calibrationObjects, setCalibrationObjects] = useState<Set<string> | null>(null);
   // Keyed "load-<slot>"/"unload-<slot>" while a filament command is in flight.
   const [filamentInFlight, setFilamentInFlight] = useState<string | null>(null);
   // The filament slot the user has selected (its 1-based `slot`). Load/Unload/Edit
@@ -833,6 +880,36 @@ export function PrinterDetail() {
     }
   }, [printer?.profile, printer?.airFilterOn]);
 
+  // Ask Klipper which objects it defines so calibration buttons whose macro is
+  // absent from this firmware render disabled instead of failing on click. Only
+  // Snapmaker answers; everything else resolves null and every routine stays
+  // enabled. Re-run when the printer comes back online — discovery fails while
+  // it's unreachable.
+  useEffect(() => {
+    if (!printer) {
+      return;
+    }
+    let cancelled = false;
+    void fetchPrinterCalibrationObjects(printer).then((objects) => {
+      if (!cancelled) {
+        setCalibrationObjects(objects);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [printer?.id, printer?.profile, printer?.status === 'offline']);
+
+  // Don't leave the in-flight timer running after a navigation away.
+  useEffect(
+    () => () => {
+      if (calibrationClearTimer.current) {
+        clearTimeout(calibrationClearTimer.current);
+      }
+    },
+    [],
+  );
+
   if (!printer) {
     return (
       <div className="p-6">
@@ -899,6 +976,14 @@ export function PrinterDetail() {
   const canControlMotion = canControlPrinter && printerSupportsMotionControl(printer);
   const isMotionReady = canControlMotion && isOnline && printer.status === 'idle';
   const motionControlsDisabled = !isMotionReady || motionInFlight !== null;
+  // Calibration drives the toolhead and heats the bed, so it takes the same
+  // connected-and-idle gate as motion. Deliberately NOT gated on currentJob: a
+  // Bambu running a calibration reports no job, and that must not read as
+  // "nothing is happening".
+  const calibrationRoutines = PRINTER_CALIBRATIONS[printer.profile] ?? [];
+  const canCalibrate = canControlPrinter && printerSupportsCalibration(printer);
+  const isCalibrationReady = canCalibrate && isOnline && printer.status === 'idle';
+  const calibrationControlsDisabled = !isCalibrationReady || calibrationInFlight !== null;
   // Loading/unloading mid-print would ruin the job, so filament swaps are only
   // live when the printer is connected and idle, mirroring the motion gate.
   const canControlFilament = canControlPrinter && printerSupportsFilamentControl(printer);
@@ -909,6 +994,15 @@ export function PrinterDetail() {
   // The printer's IP is a connection secret operators shouldn't need, so it is
   // admin-only — a tighter gate than the rest of the sensitive info block.
   const canViewIpAddress = user?.role === 'admin';
+  // The IP readout doubles as a link to the printer's own web interface. Use the
+  // stored base URL when it is a plain http(s) address, otherwise derive one from
+  // the IP the same way the profiles do.
+  const printerWebUrl = (() => {
+    const stored = (printer.url || '').trim();
+    if (/^https?:\/\//i.test(stored)) return stored;
+    const ip = (printer.ipAddress || '').trim();
+    return ip ? `http://${ip}` : '';
+  })();
   const supportsWebcamStream = printerSupportsWebcamStream(printer);
   const supportsLiveMjpeg = printerSupportsLiveMjpeg(printer);
   const webcamSnapshotUrl = `${buildPrinterWebcamSnapshotUrl(printer)}?t=${snapshotNonce}`;
@@ -939,7 +1033,10 @@ export function PrinterDetail() {
       subType: '',
       color: spool.color || '#808080',
       isLoaded: true,
-      isInUse: printer.status === 'printing',
+      // The poller marks the slot the extruder is actually drawing from. Older
+      // poller builds don't send it, so fall back to the previous
+      // whole-printer approximation rather than showing nothing.
+      isInUse: spool.active ?? printer.status === 'printing',
       trayId,
       label: bambuSlotLabel(trayId),
       remaining: spool.remaining,
@@ -949,6 +1046,10 @@ export function PrinterDetail() {
   const filamentSlots: FilamentSlot[] =
     taskConfigSlots.length > 0 ? taskConfigSlots : spoolSlots;
   const selectedSlot = filamentSlots.find((s) => s.slot === selectedFilamentSlot) ?? null;
+  // The AMS spins a spool past its reader to re-scan the tag, which it can only
+  // do with the filament retracted — so any loaded slot blocks the re-read.
+  const anyFilamentLoaded = filamentSlots.some((s) => s.isInUse);
+  const canRefreshRfid = canControlFilament && printerSupportsRfidRefresh(printer);
   const formattedTimeRemaining = formatMinutesAsHourDotMinute(printer.currentJob?.timeRemaining ?? 0);
   const formattedPrintingTime = formatMinutesAsHourDotMinute(printer.currentJob?.printingTime ?? 0);
 
@@ -1004,6 +1105,49 @@ export function PrinterDetail() {
       toast.error(error instanceof Error ? error.message : 'Unable to send printer command');
     } finally {
       setCommandInFlight(null);
+    }
+  };
+
+  const handleEmergencyStop = async () => {
+    if (!canControlPrinter) {
+      toast.error('You do not have permission to control this printer.');
+      return;
+    }
+
+    setEstopInFlight(true);
+
+    try {
+      await sendPrinterEmergencyStop(printer);
+      setEstopped(true);
+      // The firmware is down: no job is running and nothing is heating. Reflect
+      // that immediately rather than waiting a poll cycle.
+      setPrinter((prev) =>
+        prev ? { ...prev, status: 'error', currentJob: undefined, progress: 0 } : prev,
+      );
+      toast.success('Emergency stop sent. The printer is halted until a firmware restart.');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Unable to send the emergency stop');
+    } finally {
+      setEstopInFlight(false);
+    }
+  };
+
+  const handleFirmwareRestart = async () => {
+    if (!canControlPrinter) {
+      toast.error('You do not have permission to control this printer.');
+      return;
+    }
+
+    setFirmwareRestartInFlight(true);
+
+    try {
+      await sendPrinterFirmwareRestart(printer);
+      setEstopped(false);
+      toast.success('Firmware restart sent. Home the axes before printing again.');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Unable to restart the firmware');
+    } finally {
+      setFirmwareRestartInFlight(false);
     }
   };
 
@@ -1139,8 +1283,57 @@ export function PrinterDetail() {
 
   const handleHomeAll = () => runMotionCommand('home', () => homePrinterAxes(printer, 'all'));
 
+  const handleHomeZ = () => runMotionCommand('home-z', () => homePrinterAxes(printer, 'z'));
+
   const handleDisableMotors = () =>
     runMotionCommand('disable', () => disablePrinterMotors(printer));
+
+  // Start a calibration routine the operator already confirmed. Neither firmware
+  // reports calibration progress: Bambu flips to `printing` (so the poller
+  // re-disables the card on its own), but Snapmaker stays `standby` for the
+  // whole run, so we hold the in-flight state for the routine's estimated
+  // duration. That estimate is the one thing this card approximates — the toast
+  // tells the operator to watch the machine rather than the dashboard.
+  const runCalibration = async (routine: CalibrationRoutine) => {
+    if (!isCalibrationReady) {
+      return;
+    }
+
+    setCalibrationInFlight(routine.id);
+
+    try {
+      await runPrinterCalibration(printer, routine);
+      setCalibrationStartedAt(Date.now());
+      toast.success(
+        `${routine.label} started — watch the printer or the camera; this can take up to ${routine.estimatedMinutes} minutes.`,
+      );
+      if (calibrationClearTimer.current) {
+        clearTimeout(calibrationClearTimer.current);
+      }
+      calibrationClearTimer.current = setTimeout(
+        () => setCalibrationInFlight(null),
+        routine.estimatedMinutes * 60_000,
+      );
+    } catch (error) {
+      setCalibrationInFlight(null);
+      toast.error(error instanceof Error ? error.message : 'Unable to start calibration');
+    }
+  };
+
+  // Bambu reports no currentJob while calibrating, so the Current Job card's
+  // Cancel button doesn't render — this is the only way to abort from the
+  // dashboard. Snapmaker gets no equivalent: only M112 stops a running Klipper
+  // script, and that halts the MCU until someone runs FIRMWARE_RESTART.
+  const handleStopCalibration = async () => {
+    try {
+      await sendPrinterCommand(printer, 'cancel');
+      setCalibrationInFlight(null);
+      setCalibrationStartedAt(null);
+      toast.success('Calibration stop sent.');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Unable to stop calibration');
+    }
+  };
 
   const handleFilamentAction = async (action: 'load' | 'unload', slot: FilamentSlot) => {
     if (!isFilamentReady) {
@@ -1157,6 +1350,23 @@ export function PrinterDetail() {
       }
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Unable to control filament');
+    } finally {
+      setFilamentInFlight(null);
+    }
+  };
+
+  const handleRfidRefresh = async (slot: FilamentSlot) => {
+    if (slot.trayId === undefined || anyFilamentLoaded) {
+      return;
+    }
+
+    setFilamentInFlight(`rfid-${slot.slot}`);
+
+    try {
+      await refreshPrinterFilamentTag(printer, slot.trayId);
+      toast.success('Re-reading tag — updated details appear within a few seconds.');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Unable to re-read the tag');
     } finally {
       setFilamentInFlight(null);
     }
@@ -1310,6 +1520,47 @@ export function PrinterDetail() {
             {printer.model}
           </p>
         </div>
+        {/* Emergency stop lives in the page header, not the job-control card: it
+            is a firmware halt rather than a job action, so it stays reachable
+            without scrolling and whether or not a print is running. */}
+        {canControlPrinter && printerSupportsEmergencyStop(printer) && (
+          <div className="flex items-center gap-2">
+            {(estopped || printer.status === 'error') && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={firmwareRestartInFlight}
+                onClick={handleFirmwareRestart}
+              >
+                <RotateCcw className="size-4 mr-2" />
+                {firmwareRestartInFlight ? 'Restarting...' : 'Restart Firmware'}
+              </Button>
+            )}
+            <Button
+              type="button"
+              variant="destructive"
+              size="sm"
+              disabled={estopInFlight}
+              onClick={() => setEstopConfirmOpen(true)}
+            >
+              <OctagonAlert className="size-4 mr-2" />
+              {estopInFlight ? 'Stopping...' : 'E-Stop'}
+            </Button>
+          </div>
+        )}
+        {canCalibrate && (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className={CONTROL_GLOW}
+            onClick={() => setIsCalibrationOpen(true)}
+          >
+            <SlidersHorizontal className="size-4 mr-2" />
+            Calibrate
+          </Button>
+        )}
         {user?.role === 'admin' && (
           <div className="flex items-center gap-2">
             {isLayoutEditing && (
@@ -1848,7 +2099,35 @@ export function PrinterDetail() {
                           Edit
                         </Button>
                       )}
+                      {canRefreshRfid && (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          className={`h-8 gap-1 px-3 text-xs ${CONTROL_GLOW}`}
+                          disabled={
+                            !selectedSlot ||
+                            selectedSlot.trayId === undefined ||
+                            filamentControlsDisabled ||
+                            anyFilamentLoaded
+                          }
+                          onClick={() => selectedSlot && handleRfidRefresh(selectedSlot)}
+                        >
+                          <ScanLine className="size-3.5" />
+                          {selectedSlot && filamentInFlight === `rfid-${selectedSlot.slot}`
+                            ? '…'
+                            : 'Re-read tag'}
+                        </Button>
+                      )}
                     </div>
+                    {canRefreshRfid && anyFilamentLoaded && (
+                      // Without this the disabled button just looks broken —
+                      // the constraint is the AMS's, not a permissions problem.
+                      <p className="mt-2 text-xs text-muted-foreground">
+                        Unload filament before re-reading a tag — the AMS has to spin the spool
+                        past its reader.
+                      </p>
+                    )}
                   </div>
                 )}
               </>
@@ -2041,21 +2320,44 @@ export function PrinterDetail() {
                       >
                         <ArrowDown className="size-5" />
                       </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="icon"
+                        className={CONTROL_GLOW}
+                        disabled={motionControlsDisabled}
+                        onClick={handleHomeZ}
+                        aria-label="Home Z axis"
+                      >
+                        <Home className="size-5" />
+                      </Button>
                     </div>
                     <div className="mt-2 text-center text-xs text-muted-foreground">Z</div>
                   </div>
                 </div>
 
-                <Button
-                  type="button"
-                  variant="outline"
-                  className={`w-full ${CONTROL_GLOW}`}
-                  disabled={motionControlsDisabled}
-                  onClick={handleDisableMotors}
-                >
-                  <Power className="size-4 mr-2" />
-                  {motionInFlight === 'disable' ? 'Disabling…' : 'Disable motors'}
-                </Button>
+                <div className="grid grid-cols-2 gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className={CONTROL_GLOW}
+                    disabled={motionControlsDisabled}
+                    onClick={handleHomeAll}
+                  >
+                    <Home className="size-4 mr-2" />
+                    {motionInFlight === 'home' ? 'Homing…' : 'Home all'}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className={CONTROL_GLOW}
+                    disabled={motionControlsDisabled}
+                    onClick={handleDisableMotors}
+                  >
+                    <Power className="size-4 mr-2" />
+                    {motionInFlight === 'disable' ? 'Disabling…' : 'Disable motors'}
+                  </Button>
+                </div>
 
                 {!isMotionReady && !isOnline && (
                   <p className="text-sm text-muted-foreground">
@@ -2074,7 +2376,20 @@ export function PrinterDetail() {
                   <Network className="size-4 mt-0.5 text-muted-foreground" />
                   <div className="flex-1">
                     <div className="text-sm text-muted-foreground">IP Address</div>
-                    <div className={`${READOUT} font-medium`}>{printer.ipAddress}</div>
+                    {printerWebUrl ? (
+                      <a
+                        href={printerWebUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        title="Open the printer's web interface in a new tab"
+                        className={`${READOUT} font-medium inline-flex items-center gap-1.5 text-primary hover:underline`}
+                      >
+                        {printer.ipAddress}
+                        <ExternalLink className="size-3.5" />
+                      </a>
+                    ) : (
+                      <div className={`${READOUT} font-medium`}>{printer.ipAddress}</div>
+                    )}
                   </div>
                 </div>
               )}
@@ -2193,6 +2508,161 @@ export function PrinterDetail() {
           ),
         }}
       />
+
+      <Dialog open={isCalibrationOpen} onOpenChange={setIsCalibrationOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <SlidersHorizontal className="size-5" />
+              Calibration
+            </DialogTitle>
+            <DialogDescription>
+              Runs {printer.name}’s own calibration routines. The printer is unusable while one
+              runs.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div className="grid gap-2">
+              {calibrationRoutines.map((routine) => {
+                // A routine whose Klipper object is missing would be rejected on
+                // click; disable it rather than let the operator find out the
+                // hard way. When discovery didn't run (calibrationObjects ===
+                // null) everything stays live.
+                const unsupported = Boolean(
+                  routine.requiresObject &&
+                    calibrationObjects &&
+                    !calibrationObjects.has(routine.requiresObject),
+                );
+
+                return (
+                  <Button
+                    key={routine.id}
+                    type="button"
+                    variant="outline"
+                    className={`${CONTROL_GLOW} justify-between`}
+                    disabled={calibrationControlsDisabled || unsupported}
+                    onClick={() => setPendingCalibration(routine)}
+                  >
+                    <span>
+                      {calibrationInFlight === routine.id ? `${routine.label}…` : routine.label}
+                    </span>
+                    <span className="text-xs text-muted-foreground">
+                      {unsupported ? 'Not available' : `~${routine.estimatedMinutes} min`}
+                    </span>
+                  </Button>
+                );
+              })}
+            </div>
+
+            {calibrationInFlight && calibrationStartedAt && (
+              <p className="text-sm text-muted-foreground">
+                Started{' '}
+                {new Date(calibrationStartedAt).toLocaleTimeString([], {
+                  hour: '2-digit',
+                  minute: '2-digit',
+                })}
+                . The printer doesn’t report calibration progress — watch the machine or the camera.
+              </p>
+            )}
+
+            {/* Bambu reports no currentJob while calibrating, so the Current Job
+                card's Cancel button is absent — this is the only stop. */}
+            {isBambuProfile(printer.profile) && calibrationInFlight && (
+              <Button
+                type="button"
+                variant="destructive"
+                className="w-full"
+                onClick={handleStopCalibration}
+              >
+                <Square className="size-4 mr-2" />
+                Stop calibration
+              </Button>
+            )}
+
+            {!isCalibrationReady && !isOnline && (
+              <p className="text-sm text-muted-foreground">Connect the printer to calibrate it.</p>
+            )}
+            {!isCalibrationReady && isOnline && (
+              <p className="text-sm text-muted-foreground">
+                The printer must be idle to start a calibration.
+              </p>
+            )}
+
+            {printer.profile === 'snapmaker_u1' && (
+              <p className="text-xs text-muted-foreground">
+                Results last until the next restart. Run SAVE_CONFIG from the printer’s own screen
+                to keep them.
+              </p>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Stacked on top of the calibration dialog rather than nested inside it:
+          Radix layers the two portals, and the list stays visible behind the
+          confirmation. */}
+      <AlertDialog
+        open={pendingCalibration !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setPendingCalibration(null);
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Start {pendingCalibration?.label.toLowerCase()}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {pendingCalibration?.description} Takes up to {pendingCalibration?.estimatedMinutes}{' '}
+              minutes, and the printer can’t be used until it finishes.
+              {printer.profile === 'snapmaker_u1'
+                ? ' It cannot be stopped from the dashboard once started.'
+                : ''}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                const routine = pendingCalibration;
+                setPendingCalibration(null);
+                if (routine) {
+                  void runCalibration(routine);
+                }
+              }}
+            >
+              Start calibration
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={estopConfirmOpen} onOpenChange={setEstopConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Emergency stop {printer.name}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This halts the printer's firmware at once — heaters and motors are cut mid-move, so
+              any running print is lost and filament may be left in the hotend. The printer stays
+              shut down until you restart its firmware and re-home it. Use Cancel instead to stop a
+              print cleanly.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Back</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-white hover:bg-destructive/90 dark:bg-destructive/60"
+              onClick={() => {
+                setEstopConfirmOpen(false);
+                void handleEmergencyStop();
+              }}
+            >
+              Emergency stop
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {user?.role === 'admin' && editDraft && (
         <Dialog open={isEditOpen} onOpenChange={setIsEditOpen}>

@@ -48,19 +48,11 @@ interface StatusLightFlashDialogProps {
   onClose: () => void;
 }
 
-function defaultTransport(): MqttTransport {
-  return window.location.protocol === 'https:' ? 'wss' : 'tcp';
-}
-
-function defaultPortFor(transport: MqttTransport, provisioning: StatusLightProvisioningInfo | null): number {
-  if (transport === 'tcp') {
-    return provisioning?.mqttPort ?? 1883;
-  }
+// wss-only: dial the site's own HTTPS port. Falls back to 443 when the page
+// carries no explicit port (i.e. it is already served on the standard one).
+function defaultWssPort(): number {
   const pagePort = Number.parseInt(window.location.port, 10);
-  if (Number.isFinite(pagePort) && pagePort > 0) {
-    return pagePort;
-  }
-  return transport === 'wss' ? 443 : 80;
+  return Number.isFinite(pagePort) && pagePort > 0 ? pagePort : 443;
 }
 
 // Stepper dialog: pick the USB serial device, optionally flash the merged
@@ -86,9 +78,11 @@ export function StatusLightFlashDialog({ mode, printerId, printerName, onClose }
 
   const [wifiSsid, setWifiSsid] = useState('');
   const [wifiPassword, setWifiPassword] = useState('');
-  const [transport, setTransport] = useState<MqttTransport>(defaultTransport);
+  // wss is the only transport the broker supports (no raw-TCP listener), so
+  // there is nothing to pick — see server/statusLightBroker.js.
+  const transport: MqttTransport = 'wss';
   const [mqttHost, setMqttHost] = useState(() => window.location.hostname);
-  const [mqttPort, setMqttPort] = useState(() => String(defaultPortFor(defaultTransport(), null)));
+  const [mqttPort, setMqttPort] = useState(() => String(defaultWssPort()));
   const [ledPolarity, setLedPolarity] = useState<LedPolarity>('common_cathode');
   const [sourceFileIndex, setSourceFileIndex] = useState(0);
   const [sourceCopied, setSourceCopied] = useState(false);
@@ -100,14 +94,7 @@ export function StatusLightFlashDialog({ mode, printerId, printerName, onClose }
 
   useEffect(() => {
     fetchStatusLightProvisioning()
-      .then((info) => {
-        setProvisioning(info);
-        setMqttPort((current) =>
-          current === String(defaultPortFor(defaultTransport(), null))
-            ? String(defaultPortFor(defaultTransport(), info))
-            : current,
-        );
-      })
+      .then((info) => setProvisioning(info))
       .catch((err: Error) => setProvisioningError(err.message));
     if (mode === 'flash') {
       checkFirmwareAvailable().then(setFirmwareAvailable);
@@ -133,11 +120,6 @@ export function StatusLightFlashDialog({ mode, printerId, printerName, onClose }
     }
     return null;
   }, [provisioningError, brokerDisabled, mode, firmwareAvailable]);
-
-  const handleTransportChange = (next: MqttTransport) => {
-    setTransport(next);
-    setMqttPort(String(defaultPortFor(next, provisioning)));
-  };
 
   const handleCopySource = async () => {
     try {
@@ -467,36 +449,21 @@ export function StatusLightFlashDialog({ mode, printerId, printerName, onClose }
                 onChange={(event) => setWifiPassword(event.target.value)}
               />
             </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-2">
-                <Label>Connection</Label>
-                <Select value={transport} onValueChange={(value) => handleTransportChange(value as MqttTransport)}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="tcp">MQTT (LAN, port {String(provisioning?.mqttPort ?? 1883)})</SelectItem>
-                    <SelectItem value="ws">WebSocket (http)</SelectItem>
-                    <SelectItem value="wss">WebSocket (https)</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label>LED type</Label>
-                <Select value={ledPolarity} onValueChange={(value) => setLedPolarity(value as LedPolarity)}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="common_cathode">Common cathode</SelectItem>
-                    <SelectItem value="common_anode">Common anode</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
+            <div className="space-y-2">
+              <Label>LED type</Label>
+              <Select value={ledPolarity} onValueChange={(value) => setLedPolarity(value as LedPolarity)}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="common_cathode">Common cathode</SelectItem>
+                  <SelectItem value="common_anode">Common anode</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
             <div className="grid grid-cols-[1fr_6rem] gap-3">
               <div className="space-y-2">
-                <Label htmlFor="status-light-host">MQTT host</Label>
+                <Label htmlFor="status-light-host">Site host (wss)</Label>
                 <Input
                   id="status-light-host"
                   value={mqttHost}
@@ -514,8 +481,9 @@ export function StatusLightFlashDialog({ mode, printerId, printerName, onClose }
               </div>
             </div>
             <p className="text-xs text-muted-foreground">
-              The device must be able to reach this address from its WiFi network. Use MQTT (LAN) when
-              the server is on the same network; use WebSocket when only the website is reachable.
+              The device connects over wss (encrypted WebSocket), so it needs its own
+              WiFi network to reach this host over HTTPS with a certificate it trusts —
+              a Let&apos;s Encrypt-style certificate works, a self-signed one will not.
             </p>
             <p className="text-xs text-muted-foreground">
               The broker username and password are filled in automatically from this server's shared

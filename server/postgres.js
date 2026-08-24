@@ -106,6 +106,15 @@ ALTER TABLE queue_jobs ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
 ALTER TABLE queue_jobs ADD COLUMN IF NOT EXISTS file_content BYTEA;
 ALTER TABLE queue_jobs ADD COLUMN IF NOT EXISTS file_mime TEXT;
 ALTER TABLE queue_jobs ADD COLUMN IF NOT EXISTS file_size_bytes INTEGER NOT NULL DEFAULT 0;
+-- Print-time / filament estimate derived from the uploaded model at submit time
+-- (server/printEstimate.js). estimate_source records where the numbers came
+-- from -- 'slicer' (the sliced file's own figures), 'geometry'/'bbox' (our
+-- heuristic), or 'none' (unparseable, so the backfill stops retrying it). NULL
+-- means not yet estimated, which is what the backfill worker looks for. The
+-- time half reuses the existing estimated_time column; marking a job printed
+-- nulls file_content, so both must be stored rather than recomputed on read.
+ALTER TABLE queue_jobs ADD COLUMN IF NOT EXISTS estimated_filament_grams DOUBLE PRECISION;
+ALTER TABLE queue_jobs ADD COLUMN IF NOT EXISTS estimate_source TEXT;
 -- Supports the queue/history reads, which filter on (form_type, printed_status)
 -- among non-deleted rows. Partial index keeps it small and skips soft-deleted jobs.
 CREATE INDEX IF NOT EXISTS queue_jobs_active_idx
@@ -475,6 +484,62 @@ const MIGRATIONS = [
           WHERE tag_uid IS NOT NULL
           ORDER BY tag_uid, updated_at DESC
         );
+    `,
+  },
+  {
+    version: 5,
+    name: 'update-runs-history',
+    // Durable state for the admin software-update flow. Previously an update was
+    // fire-and-forget: the progress log lived in React state and died with the
+    // browser tab (while the UI claimed it was "safe to close"), and there was no
+    // history at all. Persisting the run here is what lets the freshly recreated
+    // web container pick the run back up on boot, verify the new version's health,
+    // and offer a rollback target.
+    //
+    // active_guard is the concurrency guard. Postgres does not collide NULLs in a
+    // unique index, so any number of finished runs (guard NULL) coexist while at
+    // most one in-flight run may hold TRUE — a second admin's INSERT fails with
+    // 23505. Durable and multi-process safe, unlike a module-level JS flag that
+    // would vanish with the very container being replaced.
+    //
+    // schema_version records MAX(schema_migrations.version) at run start so the UI
+    // can tell an admin exactly how many forward-only migrations a rollback would
+    // cross — migrations are never un-applied by rolling an image back.
+    sql: `
+      CREATE TABLE IF NOT EXISTS update_runs (
+        id BIGSERIAL PRIMARY KEY,
+        kind TEXT NOT NULL DEFAULT 'update',
+        state TEXT NOT NULL,
+        from_version TEXT NOT NULL,
+        to_version TEXT,
+        target_tag TEXT,
+        schema_version INTEGER,
+        actor_name TEXT,
+        actor_username TEXT,
+        actor_role TEXT,
+        preflight JSONB,
+        health JSONB,
+        error TEXT,
+        active_guard BOOLEAN,
+        started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        deadline_at TIMESTAMPTZ NOT NULL,
+        finished_at TIMESTAMPTZ
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS update_runs_single_active_idx
+        ON update_runs (active_guard);
+      CREATE INDEX IF NOT EXISTS update_runs_started_idx
+        ON update_runs (started_at DESC);
+
+      CREATE TABLE IF NOT EXISTS update_run_events (
+        id BIGSERIAL PRIMARY KEY,
+        run_id BIGINT NOT NULL REFERENCES update_runs(id) ON DELETE CASCADE,
+        at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        level TEXT NOT NULL DEFAULT 'info',
+        message TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS update_run_events_run_idx
+        ON update_run_events (run_id, id);
     `,
   },
 ];
@@ -1225,6 +1290,11 @@ export async function upsertQueueJobs(jobs) {
       submitted_at,
       priority,
       estimated_time,
+      -- Not in the INSERT column list above: an /api/v1 upsert must not clobber
+      -- an estimate it never carried, so the stored value is preserved on
+      -- conflict and returned here for the response projection.
+      estimated_filament_grams,
+      estimate_source,
       form_type,
       printed_status
     )
@@ -1239,6 +1309,8 @@ export async function upsertQueueJobs(jobs) {
           'progress', 0,
           'estimatedTime', estimated_time,
           'timeRemaining', estimated_time,
+          'estimatedFilament', estimated_filament_grams,
+          'estimateSource', estimate_source,
           'filamentUsed', 0,
           'priority', priority,
           'stlFileUrl', stl_file_url,
@@ -1336,6 +1408,8 @@ async function listQueueJobsByPrintedStatus(printedStatus) {
           'progress', 0,
           'estimatedTime', estimated_time,
           'timeRemaining', estimated_time,
+          'estimatedFilament', estimated_filament_grams,
+          'estimateSource', estimate_source,
           'filamentUsed', 0,
           'priority', priority,
           'stlFileUrl', CASE
@@ -1466,8 +1540,9 @@ export async function insertQueueSubmission(job) {
     INSERT INTO queue_jobs (
       id, filename, file_count, submitter_name, submitter_email, notes,
       submitted_at, priority, estimated_time, form_type, printed_status,
-      file_content, file_mime, file_size_bytes
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 0, $11, $12, $13)
+      file_content, file_mime, file_size_bytes,
+      estimated_filament_grams, estimate_source
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 0, $11, $12, $13, $14, $15)
     ON CONFLICT (id) DO UPDATE SET
       filename = EXCLUDED.filename,
       file_count = EXCLUDED.file_count,
@@ -1480,6 +1555,8 @@ export async function insertQueueSubmission(job) {
       file_content = EXCLUDED.file_content,
       file_mime = EXCLUDED.file_mime,
       file_size_bytes = EXCLUDED.file_size_bytes,
+      estimated_filament_grams = EXCLUDED.estimated_filament_grams,
+      estimate_source = EXCLUDED.estimate_source,
       deleted_at = NULL,
       updated_at = NOW();
   `,
@@ -1497,6 +1574,8 @@ export async function insertQueueSubmission(job) {
       job.fileContent,
       job.fileMime,
       job.fileSize,
+      job.estimatedFilamentGrams ?? null,
+      job.estimateSource ?? null,
     ],
   );
 }
@@ -1556,6 +1635,72 @@ export async function readQueueJobFileChunk(id, offset, length) {
   return result.rows[0].chunk;
 }
 
+// ── Queue estimate backfill ─────────────────────────────────────────────────
+// Rows submitted before the estimator existed (or while it was failing) carry a
+// NULL estimate_source. The backfill worker in server/queueEstimateBackfill.js
+// walks them oldest-first and fills them in.
+
+// Jobs still awaiting an estimate. Deliberately does NOT select file_content —
+// the bytes are streamed per job via readQueueJobFileChunk(), so resident memory
+// stays a small fixed window rather than scaling with the batch.
+export async function listQueueJobsNeedingEstimate(limit, maxBytes) {
+  await ensureSchema();
+  const result = await query(
+    `
+    SELECT id, filename, file_count, COALESCE(file_size_bytes, 0) AS file_size_bytes
+    FROM queue_jobs
+    WHERE form_type = $1
+      AND deleted_at IS NULL
+      AND estimate_source IS NULL
+      AND COALESCE(file_size_bytes, 0) > 0
+      AND COALESCE(file_size_bytes, 0) <= $2
+    ORDER BY submitted_at ASC NULLS LAST, created_at ASC
+    LIMIT $3;
+  `,
+    [QUEUE_FORM_TYPE, maxBytes, limit],
+  );
+  return result.rows;
+}
+
+// Record a backfilled estimate. `estimatedTime` is left alone when null so a
+// job whose file could not be parsed ('none') keeps whatever time it already
+// had; estimate_source is always written, which is what stops the worker from
+// picking the same unparseable row up forever.
+export async function updateQueueJobEstimate(id, { estimatedTime, filamentGrams, source }) {
+  await ensureSchema();
+  await query(
+    `
+    UPDATE queue_jobs
+    SET estimated_time = COALESCE($2, estimated_time),
+        estimated_filament_grams = $3,
+        estimate_source = $4,
+        updated_at = NOW()
+    WHERE id = $1
+      AND deleted_at IS NULL;
+  `,
+    [id, estimatedTime ?? null, filamentGrams ?? null, source],
+  );
+}
+
+// Mark every row that has no stored file (or one too large to parse) as
+// unestimatable in a single statement, so the worker never has to page through
+// them. Returns the number of rows stamped.
+export async function markQueueJobsUnestimatable(maxBytes) {
+  await ensureSchema();
+  const result = await query(
+    `
+    UPDATE queue_jobs
+    SET estimate_source = 'none', updated_at = NOW()
+    WHERE form_type = $1
+      AND deleted_at IS NULL
+      AND estimate_source IS NULL
+      AND (COALESCE(file_size_bytes, 0) = 0 OR COALESCE(file_size_bytes, 0) > $2);
+  `,
+    [QUEUE_FORM_TYPE, maxBytes],
+  );
+  return result.rowCount ?? 0;
+}
+
 // ── Queue migration (host → host) ──────────────────────────────────────────
 // A remote print-farm manager migrates the queue between hosts by pulling a
 // manifest from the source (exportQueueJobs), recreating the rows on the
@@ -1582,6 +1727,8 @@ export async function exportQueueJobs(includePrinted = false, ids = null) {
           'fileCount', file_count,
           'printedStatus', printed_status,
           'estimatedTime', estimated_time,
+          'estimatedFilament', estimated_filament_grams,
+          'estimateSource', estimate_source,
           'priority', priority,
           'stlFileUrl', stl_file_url,
           'submitterName', submitter_name,
@@ -1644,6 +1791,8 @@ export async function importQueueJobs(jobs) {
         END AS submitted_at,
         COALESCE(data->>'priority', 'low') AS priority,
         COALESCE((data->>'estimatedTime')::integer, 0) AS estimated_time,
+        (data->>'estimatedFilament')::double precision AS estimated_filament_grams,
+        NULLIF(data->>'estimateSource', '') AS estimate_source,
         COALESCE((data->>'printedStatus')::integer, 0) AS printed_status
       FROM input
       WHERE COALESCE(data->>'id', '') <> ''
@@ -1651,11 +1800,13 @@ export async function importQueueJobs(jobs) {
     upserted AS (
       INSERT INTO queue_jobs (
         id, filename, file_count, stl_file_url, submitter_name, submitter_email,
-        notes, submitted_at, priority, estimated_time, form_type, printed_status
+        notes, submitted_at, priority, estimated_time, form_type, printed_status,
+        estimated_filament_grams, estimate_source
       )
       SELECT
         id, filename, file_count, stl_file_url, submitter_name, submitter_email,
-        notes, submitted_at, priority, estimated_time, $2, printed_status
+        notes, submitted_at, priority, estimated_time, $2, printed_status,
+        estimated_filament_grams, estimate_source
       FROM normalized
       ON CONFLICT (id) DO UPDATE SET
         filename = EXCLUDED.filename,
@@ -1667,6 +1818,8 @@ export async function importQueueJobs(jobs) {
         submitted_at = EXCLUDED.submitted_at,
         priority = EXCLUDED.priority,
         estimated_time = EXCLUDED.estimated_time,
+        estimated_filament_grams = EXCLUDED.estimated_filament_grams,
+        estimate_source = EXCLUDED.estimate_source,
         printed_status = EXCLUDED.printed_status,
         form_type = EXCLUDED.form_type,
         deleted_at = NULL,
@@ -2582,6 +2735,208 @@ export async function listAuditLogs(limit = 200) {
   return result.rows[0].data;
 }
 
+// ── Software update runs ────────────────────────────────────────────────────
+// Durable state for the admin update/rollback flow (migration #5). The whole
+// point of persisting this is that the update replaces the very container doing
+// the updating: the run is written here before Watchtower is triggered, and the
+// freshly recreated web container's watchdog reads it back on boot to finish
+// verification. Nothing here may hold infrastructure detail — `error` and event
+// messages are rendered in the browser (see the sanitizing note in app.js).
+
+// Non-terminal states hold active_guard = TRUE; the unique index on that column
+// is what makes "only one update at a time" a database invariant.
+const UPDATE_RUN_ACTIVE_STATES = ['queued', 'retagging', 'triggering', 'applying', 'verifying'];
+
+function updateRunRowToJs(row) {
+  if (!row) return null;
+  const iso = (value) => (value ? new Date(value).toISOString() : null);
+  return {
+    id: Number(row.id),
+    kind: row.kind,
+    state: row.state,
+    fromVersion: row.from_version,
+    toVersion: row.to_version,
+    targetTag: row.target_tag,
+    schemaVersion: row.schema_version === null ? null : Number(row.schema_version),
+    actorName: row.actor_name,
+    actorUsername: row.actor_username,
+    actorRole: row.actor_role,
+    preflight: row.preflight || null,
+    health: row.health || null,
+    error: row.error,
+    active: UPDATE_RUN_ACTIVE_STATES.includes(row.state),
+    startedAt: iso(row.started_at),
+    updatedAt: iso(row.updated_at),
+    deadlineAt: iso(row.deadline_at),
+    finishedAt: iso(row.finished_at),
+  };
+}
+
+// Creates the run in state 'queued'. Throws a plain Error tagged
+// `conflict = true` when another run is already in flight, so the route can map
+// it to 409 without importing pg error codes.
+export async function createUpdateRun({
+  kind = 'update',
+  fromVersion,
+  toVersion = null,
+  targetTag = null,
+  actorName = null,
+  actorUsername = null,
+  actorRole = null,
+  preflight = null,
+  deadlineMs,
+}) {
+  await ensureSchema();
+  // Snapshot the applied migration high-water mark so the UI can say exactly how
+  // many forward-only migrations a rollback from here would cross.
+  const schemaVersion = await query('SELECT COALESCE(MAX(version), 0) AS version FROM schema_migrations')
+    .then((r) => Number(r.rows[0].version))
+    .catch(() => null);
+  try {
+    const result = await query(
+      `
+      INSERT INTO update_runs (
+        kind, state, from_version, to_version, target_tag, schema_version,
+        actor_name, actor_username, actor_role, preflight, active_guard, deadline_at
+      ) VALUES ($1, 'queued', $2, $3, $4, $5, $6, $7, $8, $9, TRUE, NOW() + ($10 || ' milliseconds')::interval)
+      RETURNING *
+      `,
+      [
+        kind, fromVersion, toVersion, targetTag, schemaVersion,
+        actorName, actorUsername, actorRole,
+        preflight ? JSON.stringify(preflight) : null,
+        String(Math.max(60000, Number(deadlineMs) || 900000)),
+      ],
+    );
+    return updateRunRowToJs(result.rows[0]);
+  } catch (error) {
+    if (error && error.code === '23505') {
+      const conflict = new Error('An update is already running');
+      conflict.conflict = true;
+      throw conflict;
+    }
+    throw error;
+  }
+}
+
+// Applied-migration high-water mark. Surfaced in preflight so the rollback
+// warning can name the actual schema version rather than a vague "migrations may
+// not be reversible".
+export async function currentSchemaVersion() {
+  await ensureSchema();
+  const result = await query('SELECT COALESCE(MAX(version), 0) AS version FROM schema_migrations');
+  return Number(result.rows[0].version);
+}
+
+export async function getActiveUpdateRun() {
+  await ensureSchema();
+  const result = await query('SELECT * FROM update_runs WHERE active_guard IS TRUE LIMIT 1');
+  return updateRunRowToJs(result.rows[0] || null);
+}
+
+export async function getUpdateRun(id) {
+  await ensureSchema();
+  const runId = Number.parseInt(id, 10);
+  if (!Number.isFinite(runId)) return null;
+  const result = await query('SELECT * FROM update_runs WHERE id = $1', [runId]);
+  return updateRunRowToJs(result.rows[0] || null);
+}
+
+export async function listUpdateRuns(limit = 20) {
+  await ensureSchema();
+  const safeLimit = Math.min(Math.max(Number.parseInt(limit, 10) || 20, 1), 100);
+  const result = await query(
+    'SELECT * FROM update_runs ORDER BY started_at DESC, id DESC LIMIT $1',
+    [safeLimit],
+  );
+  return result.rows.map(updateRunRowToJs);
+}
+
+// The most recent successfully completed forward update — its from_version is
+// the "last known good" an admin would roll back to.
+export async function lastSuccessfulUpdateRun() {
+  await ensureSchema();
+  const result = await query(
+    `SELECT * FROM update_runs
+     WHERE state = 'succeeded' AND kind = 'update'
+     ORDER BY finished_at DESC NULLS LAST, id DESC LIMIT 1`,
+  );
+  return updateRunRowToJs(result.rows[0] || null);
+}
+
+// The version currently pinned by a deliberate rollback, or null. Used to stop
+// the card from immediately re-offering the update you just rolled away from.
+export async function lastRollbackUpdateRun() {
+  await ensureSchema();
+  const result = await query(
+    `SELECT * FROM update_runs
+     WHERE state = 'succeeded' AND kind = 'rollback'
+     ORDER BY finished_at DESC NULLS LAST, id DESC LIMIT 1`,
+  );
+  return updateRunRowToJs(result.rows[0] || null);
+}
+
+export async function appendUpdateRunEvent(runId, message, level = 'info') {
+  await ensureSchema();
+  const id = Number.parseInt(runId, 10);
+  if (!Number.isFinite(id)) return;
+  await query(
+    'INSERT INTO update_run_events (run_id, level, message) VALUES ($1, $2, $3)',
+    [id, level, String(message).slice(0, 500)],
+  );
+}
+
+export async function listUpdateRunEvents(runId, limit = 200) {
+  await ensureSchema();
+  const id = Number.parseInt(runId, 10);
+  if (!Number.isFinite(id)) return [];
+  const safeLimit = Math.min(Math.max(Number.parseInt(limit, 10) || 200, 1), 1000);
+  const result = await query(
+    'SELECT at, level, message FROM update_run_events WHERE run_id = $1 ORDER BY id ASC LIMIT $2',
+    [id, safeLimit],
+  );
+  return result.rows.map((row) => ({
+    at: new Date(row.at).toISOString(),
+    level: row.level,
+    message: row.message,
+  }));
+}
+
+// Conditional transition: only moves the run when it is still in `fromState`.
+// The old and new web containers can overlap briefly during a Watchtower
+// recreate (it replaces services one at a time, and a poller/nginx restart does
+// not kill web), so two watchdogs can race the same run — the loser updates 0
+// rows and no-ops instead of double-advancing the state machine.
+export async function transitionUpdateRun(runId, fromState, toState, patch = {}) {
+  await ensureSchema();
+  const id = Number.parseInt(runId, 10);
+  if (!Number.isFinite(id)) return null;
+  const terminal = ['succeeded', 'failed', 'timed_out', 'cancelled'].includes(toState);
+  const result = await query(
+    `
+    UPDATE update_runs SET
+      state = $3,
+      to_version = COALESCE($4, to_version),
+      health = COALESCE($5::jsonb, health),
+      error = COALESCE($6, error),
+      updated_at = NOW(),
+      finished_at = CASE WHEN $7 THEN NOW() ELSE finished_at END,
+      -- NULLing the guard is what frees the unique index for the next run.
+      active_guard = CASE WHEN $7 THEN NULL ELSE TRUE END
+    WHERE id = $1 AND state = $2
+    RETURNING *
+    `,
+    [
+      id, fromState, toState,
+      patch.toVersion ?? null,
+      patch.health ? JSON.stringify(patch.health) : null,
+      patch.error ?? null,
+      terminal,
+    ],
+  );
+  return updateRunRowToJs(result.rows[0] || null);
+}
+
 // ── Filament Station (SpoolBuddy port) ──────────────────────────────────────
 
 function filamentSpoolRowToJs(row) {
@@ -2852,8 +3207,11 @@ export async function recordAssignmentTriggerResult(id, { success, message }) {
 // with foreign keys in this schema (→ printers, → filament_spools), so it
 // must be inserted last; TRUNCATE names every table in one statement, so it's
 // order-independent there. Deliberately excluded: schema_migrations
-// (app-managed, not user data) and poller_health (ephemeral, repopulates on
-// the poller's next cycle).
+// (app-managed, not user data), poller_health (ephemeral, repopulates on
+// the poller's next cycle), and update_runs / update_run_events — restoring an
+// old backup would otherwise resurrect a stale active_guard = TRUE row, and the
+// unique index on that column would then reject every future update with
+// "an update is already running", permanently wedging the feature.
 const BACKUP_TABLES = [
   'printers',
   'filament_spools',
@@ -2885,17 +3243,6 @@ function prepareRowForJson(row) {
   return out;
 }
 
-function reviveRowFromJson(row) {
-  const out = {};
-  for (const [key, value] of Object.entries(row)) {
-    out[key] = (
-      value && typeof value === 'object' && !Array.isArray(value)
-      && typeof value.__bytea__ === 'string' && Object.keys(value).length === 1
-    ) ? Buffer.from(value.__bytea__, 'base64') : value;
-  }
-  return out;
-}
-
 // Query parameters aren't auto-serialized by `pg`: JSONB columns need an
 // explicit JSON.stringify (matching every other write path in this file),
 // while bytea (Buffer) and plain scalars pass straight through.
@@ -2906,110 +3253,374 @@ function toInsertParam(value) {
   return value;
 }
 
-// Returns { manifest, tables } — `tables` maps table name to its rows
-// (bytea-tagged via prepareRowForJson, ready to JSON.stringify), `manifest`
-// summarizes what's inside for the archive's manifest.json.
-export async function buildBackupSnapshot() {
+// Archive layout version. v1 (the original in-memory builder) wrote one
+// `tables/<name>.json` per table holding the whole row array, with every bytea
+// column inlined as base64 — which meant the server had to hold the entire
+// farm's data, base64-expanded, in RAM to write *or* read one. v2 streams:
+// rows go out as newline-delimited JSON (`tables/<name>.jsonl`, one row per
+// line) and each bytea value becomes its own archive entry under `blobs/`,
+// referenced from the row by a `{ __blob__, bytes, key }` marker. Both formats
+// restore; only v2 is written.
+export const BACKUP_FORMAT_VERSION = 2;
+
+// Rows pulled per cursor round-trip while writing a backup. Only metadata rows
+// (bytea columns are streamed separately), so a few hundred is cheap.
+const BACKUP_ROW_FETCH = 500;
+// Bytes pulled per round-trip when streaming one bytea value in or out. This is
+// the ceiling on resident memory for file data during backup/restore.
+const BACKUP_BLOB_CHUNK_BYTES = 256 * 1024;
+// Rows per multi-row INSERT while restoring.
+const RESTORE_INSERT_BATCH = 200;
+
+function quoteIdent(name) {
+  return `"${String(name).replace(/"/g, '""')}"`;
+}
+
+// Column names come from information_schema (backup) or from the uploaded
+// archive (restore); the restore path validates every name against the live
+// table before it reaches SQL, so nothing archive-controlled is interpolated.
+async function liveColumnsOf(client, table) {
+  const result = await client.query(`SELECT * FROM ${quoteIdent(table)} LIMIT 0;`);
+  return new Set(result.fields.map((field) => field.name));
+}
+
+async function byteaColumnsOf(client, table) {
+  const { rows } = await client.query(
+    `SELECT column_name FROM information_schema.columns
+      WHERE table_schema = current_schema() AND table_name = $1 AND data_type = 'bytea'
+      ORDER BY ordinal_position;`,
+    [table],
+  );
+  return rows.map((row) => row.column_name);
+}
+
+async function primaryKeyColumnsOf(client, table) {
+  const { rows } = await client.query(
+    `SELECT a.attname AS column_name
+       FROM pg_index i
+       JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
+      WHERE i.indrelid = $1::regclass AND i.indisprimary;`,
+    [table],
+  );
+  return rows.map((row) => row.column_name);
+}
+
+async function tableExists(client, table) {
+  const { rows } = await client.query('SELECT to_regclass($1::text) AS oid;', [table]);
+  return Boolean(rows[0]?.oid);
+}
+
+// Streams one bytea value out of Postgres in fixed-size slices, so a 400 MB
+// model file costs BACKUP_BLOB_CHUNK_BYTES of RAM rather than 400 MB (the same
+// trick the queue-job download route uses).
+async function* streamBlobChunks(client, table, column, keyColumns, keyValues, size) {
+  const where = keyColumns.map((col, i) => `${quoteIdent(col)} = $${i + 3}`).join(' AND ');
+  const sql = `SELECT substring(${quoteIdent(column)} FROM $1 FOR $2) AS chunk
+                 FROM ${quoteIdent(table)} WHERE ${where};`;
+  for (let offset = 0; offset < size; offset += BACKUP_BLOB_CHUNK_BYTES) {
+    const { rows } = await client.query(sql, [offset + 1, BACKUP_BLOB_CHUNK_BYTES, ...keyValues]);
+    const chunk = rows[0]?.chunk;
+    if (!chunk || chunk.length === 0) break;
+    yield chunk;
+  }
+}
+
+// Opens a consistent, read-only snapshot of the whole backup set and returns an
+// async iterator of archive entries — each `{ name, source, method?, level?,
+// expectedSize? }`, where `source` is an async iterable of Buffers. Nothing is
+// materialized: the caller (the download route) pipes each entry straight into
+// the ZIP writer, and the entry generators pull from the database as the client
+// drains them. REPEATABLE READ means every table in the archive comes from the
+// same instant, which the old table-by-table build could not promise.
+//
+// Call `close()` when done (or on error) to end the transaction and release the
+// pooled connection.
+export async function createBackupSource({ includeFiles = true } = {}) {
   await ensureSchema();
 
-  const tables = {};
-  const manifestTables = [];
+  const client = await getPool().connect();
+  let closed = false;
+  try {
+    await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ, READ ONLY');
+  } catch (error) {
+    client.release();
+    throw error;
+  }
 
-  for (const table of BACKUP_TABLES) {
-    const result = await query(`SELECT * FROM ${table};`);
-    tables[table] = result.rows.map(prepareRowForJson);
-    manifestTables.push({ name: table, rowCount: result.rows.length });
+  const manifestTables = [];
+  let cursorSeq = 0;
+  let blobCount = 0;
+  let blobBytes = 0;
+
+  async function* entries() {
+    for (const table of BACKUP_TABLES) {
+      if (!(await tableExists(client, table))) continue;
+
+      const liveColumns = [...(await liveColumnsOf(client, table))];
+      const byteaColumns = await byteaColumnsOf(client, table);
+      const keyColumns = byteaColumns.length > 0 ? await primaryKeyColumnsOf(client, table) : [];
+      // Without a primary key there is no way to point a blob entry back at its
+      // row, so fall back to inlining that table's bytea (v1 behaviour). No
+      // table in this schema hits it — every backed-up table has a PK.
+      const inlineBytea = includeFiles && byteaColumns.length > 0 && keyColumns.length === 0;
+      const streamBlobs = includeFiles && byteaColumns.length > 0 && keyColumns.length > 0;
+      // Never SELECT a bytea column outright unless it has to be inlined —
+      // that alone would pull every stored model file into the process.
+      const plainColumns = liveColumns.filter((col) => inlineBytea || !byteaColumns.includes(col));
+
+      const pendingBlobs = [];
+      let rowCount = 0;
+
+      const selectList = [
+        ...plainColumns.map(quoteIdent),
+        ...(streamBlobs
+          ? byteaColumns.map((col) => `octet_length(${quoteIdent(col)}) AS ${quoteIdent(`__size__${col}`)}`)
+          : []),
+      ].join(', ');
+
+      const cursorName = `printfarm_backup_cur_${++cursorSeq}`;
+
+      async function* rowLines() {
+        await client.query(
+          `DECLARE ${cursorName} NO SCROLL CURSOR FOR SELECT ${selectList} FROM ${quoteIdent(table)};`,
+        );
+        try {
+          for (;;) {
+            const { rows } = await client.query(`FETCH FORWARD ${BACKUP_ROW_FETCH} FROM ${cursorName};`);
+            if (rows.length === 0) break;
+
+            let text = '';
+            for (const row of rows) {
+              const out = {};
+              for (const col of plainColumns) out[col] = row[col];
+              const prepared = prepareRowForJson(out);
+
+              if (streamBlobs) {
+                const keyValues = keyColumns.map((col) => row[col]);
+                for (const col of byteaColumns) {
+                  const size = row[`__size__${col}`];
+                  if (size === null || size === undefined) {
+                    prepared[col] = null;
+                    continue;
+                  }
+                  if (Number(size) === 0) {
+                    // Zero-length bytea has no blob entry; keep it distinct
+                    // from NULL with an (empty) inline value.
+                    prepared[col] = { __bytea__: '' };
+                    continue;
+                  }
+                  const path = `blobs/${table}/${rowCount}-${col}.bin`;
+                  const key = {};
+                  keyColumns.forEach((keyCol, i) => { key[keyCol] = keyValues[i]; });
+                  prepared[col] = { __blob__: path, bytes: Number(size), key };
+                  pendingBlobs.push({ path, column: col, keyValues, size: Number(size) });
+                  blobCount += 1;
+                  blobBytes += Number(size);
+                }
+              } else if (!includeFiles) {
+                // "Settings only" backup: keep the row, drop the file bytes.
+                for (const col of byteaColumns) prepared[col] = null;
+              }
+
+              text += `${JSON.stringify(prepared)}\n`;
+              rowCount += 1;
+            }
+            yield Buffer.from(text, 'utf8');
+          }
+        } finally {
+          await client.query(`CLOSE ${cursorName};`).catch(() => {});
+        }
+      }
+
+      yield { name: `tables/${table}.jsonl`, source: rowLines() };
+      // The consumer fully drains an entry before asking for the next one, so
+      // by here rowCount/pendingBlobs are final for this table.
+      manifestTables.push({ name: table, rowCount });
+
+      for (const blob of pendingBlobs) {
+        yield {
+          name: blob.path,
+          expectedSize: blob.size,
+          // Model files are often already-compressed containers (.3mf/.zip);
+          // level 1 keeps the CPU cost low while still shrinking raw STL/gcode.
+          level: 1,
+          source: streamBlobChunks(client, table, blob.column, keyColumns, blob.keyValues, blob.size),
+        };
+      }
+    }
+
+    // Written last: only now are the row counts known, and ZIP readers work off
+    // the central directory, so entry order does not matter.
+    const manifest = {
+      formatVersion: BACKUP_FORMAT_VERSION,
+      generatedAt: new Date().toISOString(),
+      appVersion: process.env.APP_VERSION || 'dev',
+      includesFiles: includeFiles,
+      tables: manifestTables,
+      blobs: { count: blobCount, bytes: blobBytes },
+    };
+    yield { name: 'manifest.json', source: [Buffer.from(JSON.stringify(manifest, null, 2), 'utf8')] };
   }
 
   return {
-    manifest: {
-      generatedAt: new Date().toISOString(),
-      appVersion: process.env.APP_VERSION || 'dev',
-      tables: manifestTables,
+    entries,
+    summary: () => ({ tables: manifestTables, blobs: { count: blobCount, bytes: blobBytes } }),
+    async close() {
+      if (closed) return;
+      closed = true;
+      await client.query('COMMIT').catch(() => {});
+      client.release();
     },
-    tables,
   };
 }
 
-// Reverses prepareRowForJson on every row of every table in a parsed backup
-// archive. Called once, right after reading tables/<name>.json back out of
-// the uploaded zip.
-export function reviveBackupTables(rawTables) {
-  const tables = {};
-  for (const [name, rows] of Object.entries(rawTables)) {
-    tables[name] = Array.isArray(rows) ? rows.map(reviveRowFromJson) : rows;
+// Reverses the on-disk encoding for one restored value: v2 blob markers become
+// NULL (the bytes are streamed in afterwards by writeBlobChunk), v1 inline
+// base64 becomes a Buffer. (Exported for backupArchive.test.mjs.)
+export function reviveRestoreValue(value) {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    if (typeof value.__blob__ === 'string') return null;
+    if (typeof value.__bytea__ === 'string' && Object.keys(value).length === 1) {
+      return Buffer.from(value.__bytea__, 'base64');
+    }
   }
-  return tables;
+  return value;
 }
 
-// Replaces all data in every BACKUP_TABLES table with the rows in `tables`
-// (shape: { [tableName]: row[] }, already revived via reviveBackupTables).
-// Runs as one transaction on a dedicated client: TRUNCATE everything named in
-// the archive, insert rows back respecting the one FK relationship in this
-// schema, then commit. Any error rolls the whole thing back so a bad/partial
-// upload can't half-apply. Tables missing from the archive (e.g. an older
-// backup taken before a table existed) are left untouched.
-export async function restoreBackupSnapshot(tables) {
+// Restore, driven a batch at a time by the caller instead of taking the whole
+// archive as one object. Opens a transaction, truncates every recognized table
+// named in the archive, and then accepts rows/blob chunks until commit() —
+// so a bad or partial upload still rolls back with nothing applied, exactly
+// like the old all-at-once version, but without ever holding the archive's
+// contents in memory.
+export async function startBackupRestore(tableNames) {
   await ensureSchema();
 
-  const knownTables = BACKUP_TABLES.filter((name) => Array.isArray(tables[name]));
+  const knownTables = BACKUP_TABLES.filter((name) => tableNames.includes(name));
   if (knownTables.length === 0) {
     throw new Error('Backup archive contained no recognized tables');
   }
 
   const client = await getPool().connect();
+  const liveColumnCache = new Map();
+  const insertPlans = new Map();
+  let settled = false;
+
+  async function columnsOf(table) {
+    if (!liveColumnCache.has(table)) liveColumnCache.set(table, await liveColumnsOf(client, table));
+    return liveColumnCache.get(table);
+  }
+
   try {
     await client.query('BEGIN');
-    await client.query(`TRUNCATE TABLE ${knownTables.join(', ')};`);
-
-    for (const table of knownTables) {
-      const rows = tables[table];
-      if (rows.length === 0) continue;
-
-      // A backup can predate a column drop/rename that never got a matching
-      // migration (ensureSchema only ever ADDs columns, never drops them —
-      // so a column removed from the schema code can still be lingering, or
-      // gone, on any given database). Restoring into a database whose live
-      // schema differs from the one the backup was taken on should degrade
-      // gracefully rather than fail the whole restore: only insert columns
-      // that exist on both sides, dropping anything the backup has that this
-      // database's queue_jobs (etc.) does not.
-      const liveColumns = new Set(
-        (await client.query(`SELECT * FROM ${table} LIMIT 0;`)).fields.map((field) => field.name),
-      );
-      const backupColumns = Object.keys(rows[0]);
-      const columns = backupColumns.filter((col) => liveColumns.has(col));
-      const droppedColumns = backupColumns.filter((col) => !liveColumns.has(col));
-      if (droppedColumns.length > 0) {
-        logger.warn('backup restore: dropping columns not present in the current schema', {
-          table,
-          columns: droppedColumns,
-        });
-      }
-
-      const columnList = columns.map((col) => `"${col}"`).join(', ');
-      const placeholders = columns.map((_, i) => `$${i + 1}`).join(', ');
-      const insertSql = `INSERT INTO ${table} (${columnList}) VALUES (${placeholders});`;
-
-      for (const row of rows) {
-        await client.query(insertSql, columns.map((col) => toInsertParam(row[col])));
-      }
-    }
-
-    // audit_logs.id is the only auto-incrementing PK in this schema;
-    // restoring explicit ids leaves its sequence behind, so bump it past the
-    // restored max (falls back to 1 for an empty table).
-    if (knownTables.includes('audit_logs')) {
-      await client.query(
-        `SELECT setval('audit_logs_id_seq', COALESCE((SELECT MAX(id) FROM audit_logs), 1), true);`,
-      );
-    }
-
-    await client.query('COMMIT');
+    await client.query(`TRUNCATE TABLE ${knownTables.map(quoteIdent).join(', ')};`);
   } catch (error) {
     await client.query('ROLLBACK').catch(() => {});
-    throw error;
-  } finally {
     client.release();
+    throw error;
   }
+
+  return {
+    tables: knownTables,
+
+    // rows: an array of plain objects straight out of the archive.
+    async insertRows(table, rows) {
+      if (!knownTables.includes(table) || rows.length === 0) return;
+
+      let plan = insertPlans.get(table);
+      if (!plan) {
+        // A backup can predate a column drop/rename that never got a matching
+        // migration (ensureSchema only ever ADDs columns, never drops them —
+        // so a column removed from the schema code can still be lingering, or
+        // gone, on any given database). Restoring into a database whose live
+        // schema differs from the one the backup was taken on should degrade
+        // gracefully rather than fail the whole restore: only insert columns
+        // that exist on both sides, dropping anything the backup has that this
+        // database's queue_jobs (etc.) does not.
+        const liveColumns = await columnsOf(table);
+        const backupColumns = Object.keys(rows[0]);
+        const columns = backupColumns.filter((col) => liveColumns.has(col));
+        const droppedColumns = backupColumns.filter((col) => !liveColumns.has(col));
+        if (droppedColumns.length > 0) {
+          logger.warn('backup restore: dropping columns not present in the current schema', {
+            table,
+            columns: droppedColumns,
+          });
+        }
+        if (columns.length === 0) throw new Error(`No restorable columns for table "${table}"`);
+        plan = { columns, columnList: columns.map(quoteIdent).join(', ') };
+        insertPlans.set(table, plan);
+      }
+
+      for (let start = 0; start < rows.length; start += RESTORE_INSERT_BATCH) {
+        const batch = rows.slice(start, start + RESTORE_INSERT_BATCH);
+        const params = [];
+        const tuples = batch.map((row) => {
+          const placeholders = plan.columns.map((col) => {
+            params.push(toInsertParam(reviveRestoreValue(row[col])));
+            return `$${params.length}`;
+          });
+          return `(${placeholders.join(', ')})`;
+        });
+        await client.query(
+          `INSERT INTO ${quoteIdent(table)} (${plan.columnList}) VALUES ${tuples.join(', ')};`,
+          params,
+        );
+      }
+    },
+
+    // Appends one slice of a bytea column to an already-inserted row. `key` is
+    // the archive's `{ column: value }` map from the row's blob marker; both it
+    // and `column` are validated against the live table, so archive-supplied
+    // names never reach SQL unchecked.
+    async writeBlobChunk(table, key, column, chunk, first) {
+      if (!knownTables.includes(table)) throw new Error(`Unknown table "${table}" in archive blob`);
+      const liveColumns = await columnsOf(table);
+      if (!liveColumns.has(column)) return; // column dropped since the backup
+      const keyColumns = Object.keys(key || {});
+      if (keyColumns.length === 0) throw new Error(`Archive blob for "${table}" has no row key`);
+      for (const col of keyColumns) {
+        if (!liveColumns.has(col)) throw new Error(`Archive blob key column "${col}" is not in ${table}`);
+      }
+
+      const where = keyColumns.map((col, i) => `${quoteIdent(col)} = $${i + 2}`).join(' AND ');
+      // Explicit ::bytea casts: the chunk goes over the wire as an untyped
+      // parameter, and `bytea || unknown` is ambiguous to the planner.
+      const assignment = first
+        ? `${quoteIdent(column)} = $1::bytea`
+        : `${quoteIdent(column)} = COALESCE(${quoteIdent(column)}, ''::bytea) || $1::bytea`;
+      await client.query(
+        `UPDATE ${quoteIdent(table)} SET ${assignment} WHERE ${where};`,
+        [chunk, ...keyColumns.map((col) => key[col])],
+      );
+    },
+
+    async commit() {
+      if (settled) return;
+      settled = true;
+      try {
+        // audit_logs.id is the only auto-incrementing PK in this schema;
+        // restoring explicit ids leaves its sequence behind, so bump it past
+        // the restored max (falls back to 1 for an empty table).
+        if (knownTables.includes('audit_logs')) {
+          await client.query(
+            `SELECT setval('audit_logs_id_seq', COALESCE((SELECT MAX(id) FROM audit_logs), 1), true);`,
+          );
+        }
+        await client.query('COMMIT');
+      } catch (error) {
+        await client.query('ROLLBACK').catch(() => {});
+        throw error;
+      } finally {
+        client.release();
+      }
+    },
+
+    async abort() {
+      if (settled) return;
+      settled = true;
+      await client.query('ROLLBACK').catch(() => {});
+      client.release();
+    },
+  };
 }

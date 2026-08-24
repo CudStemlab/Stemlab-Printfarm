@@ -1,0 +1,91 @@
+name: Roll Back Images
+
+# Re-points the moving `:latest` tag of the app image at a previously built
+# `:sha-<12>` tag, so the Watchtower sidecar's next pull brings the farm back to
+# that commit. One image (Dockerfile.single) = one tag to move.
+#
+# WHY THIS LIVES IN CI: Watchtower can only ever re-pull the *same* tag — it has
+# no notion of "go to that other tag" — so a rollback has to move `latest` in the
+# registry. Doing that from the `web` container would mean handing it a Docker Hub
+# token with WRITE scope; if `web` were ever compromised the attacker could push
+# arbitrary images that Watchtower then deploys as root on the farm host. Keeping
+# the registry write here means `web` only needs a fine-grained GitHub PAT scoped
+# to this repo with `Actions: write`, and the worst a compromise achieves is
+# re-pointing production at a commit CI already built from main.
+#
+# Triggered by the admin "Roll back" button via
+# POST /repos/<owner>/<repo>/actions/workflows/rollback.yml/dispatches
+# (server/updateRollback.js), or manually from the Actions tab.
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_sha:
+        description: 'Commit SHA to roll back to (7-40 hex chars; the sha-<12> image tag is derived from it)'
+        required: true
+        type: string
+
+# Read-only on repo contents: this job never commits, it only moves registry tags.
+permissions:
+  contents: read
+
+jobs:
+  rollback:
+    runs-on: ubuntu-latest
+
+    env:
+      IMAGE_PREFIX: ${{ secrets.DOCKERHUB_USERNAME }}
+      TARGET_SHA: ${{ inputs.target_sha }}
+
+    steps:
+      - name: Validate inputs
+        run: |
+          : "${IMAGE_PREFIX:?DOCKERHUB_USERNAME secret is not set}"
+          test -n "${{ secrets.DOCKERHUB_TOKEN }}" || { echo "DOCKERHUB_TOKEN secret is not set"; exit 1; }
+          # Reject anything that isn't a bare hex SHA before it reaches a tag
+          # name or a registry URL.
+          echo "$TARGET_SHA" | grep -Eq '^[0-9a-f]{7,40}$' \
+            || { echo "target_sha must be 7-40 hex characters, got: $TARGET_SHA"; exit 1; }
+          echo "SHORT_SHA=$(echo "$TARGET_SHA" | cut -c1-12)" >> "$GITHUB_ENV"
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Fail fast: confirm the target tag exists before moving `latest`, so a
+      # failed or never-published build can't leave `latest` pointing at nothing.
+      - name: Verify the rollback target exists
+        run: |
+          ref="${IMAGE_PREFIX}/printfarm:sha-${SHORT_SHA}"
+          if docker buildx imagetools inspect "$ref" >/dev/null 2>&1; then
+            echo "ok $ref"
+          else
+            echo "Refusing to roll back: no image at $ref"
+            echo "That commit predates the single-image build, or its build did not finish."
+            exit 1
+          fi
+
+      # `imagetools create` copies the manifest registry-side — no layers are
+      # pulled or pushed — and handles OCI-index vs schema-2 correctly, so we
+      # never hand-manipulate manifest bytes (where a single whitespace change
+      # would alter the digest and publish a different image).
+      - name: Re-point latest at the rollback target
+        run: |
+          echo "retagging printfarm: sha-${SHORT_SHA} -> latest"
+          docker buildx imagetools create \
+            --tag "${IMAGE_PREFIX}/printfarm:latest" \
+            "${IMAGE_PREFIX}/printfarm:sha-${SHORT_SHA}"
+
+      - name: Summary
+        run: |
+          echo "### Rolled back to \`${SHORT_SHA}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`${IMAGE_PREFIX}/printfarm:latest\` now points at \`sha-${SHORT_SHA}\`." >> "$GITHUB_STEP_SUMMARY"
+          echo "The farm updates when Watchtower next pulls (the admin card triggers this automatically)." >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "> **Note:** database migrations are forward-only and are _not_ reverted by a rollback." >> "$GITHUB_STEP_SUMMARY"

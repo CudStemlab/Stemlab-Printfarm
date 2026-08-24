@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useLocation, Navigate, Link } from 'react-router';
 import { toast } from 'sonner';
 import { useAuth } from '../contexts/AuthContext';
@@ -7,9 +7,20 @@ import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { Checkbox } from '../components/ui/checkbox';
-import { Eye, EyeOff, ClipboardList, KeyRound } from 'lucide-react';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '../components/ui/alert-dialog';
+import { Eye, EyeOff, ClipboardList, KeyRound, Loader2, Upload } from 'lucide-react';
 import { PUBLIC_VIEWER_MODE } from '../lib/runtimeConfig';
 import { fetchAdminConfigured } from '../lib/adminCredentialApi';
+import { restoreBackupFirstRun } from '../lib/backupApi';
 import { fetchEnabledOAuthProviders, type EnabledOAuthProviders } from '../lib/oauthApi';
 import { Logo } from '../components/Logo';
 
@@ -21,8 +32,6 @@ const OAUTH_ERROR_MESSAGES: Record<string, string> = {
   exchange_failed: 'Could not complete sign-in. Please try again.',
   unverified_email: 'Your account email is not verified.',
   domain_not_allowed: 'Your account is not allowed to sign in here.',
-  saml_invalid: 'The SSO response could not be verified. Please try again.',
-  saml_not_provisioned: 'Your account is not provisioned for access here.',
 };
 
 export function Login() {
@@ -44,15 +53,12 @@ export function Login() {
   // While null we hold off rendering either form to avoid a flicker.
   const [adminConfigured, setAdminConfigured] = useState<boolean | null>(null);
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [restoringBackup, setRestoringBackup] = useState(false);
+  const [pendingBackupFile, setPendingBackupFile] = useState<File | null>(null);
+  const backupFileInputRef = useRef<HTMLInputElement>(null);
   const [oauthProviders, setOauthProviders] = useState<EnabledOAuthProviders>({
-    google: false,
-    microsoft: false,
-    adfs: false,
-    saml: false,
-    googleLabel: '',
-    microsoftLabel: '',
-    adfsLabel: '',
-    samlLabel: '',
+    keycloak: false,
+    keycloakLabel: '',
   });
 
   const from = (location.state as any)?.from?.pathname || '/';
@@ -142,6 +148,34 @@ export function Login() {
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const handleBackupFileSelected = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0] ?? null;
+    event.target.value = '';
+    if (file) {
+      setPendingBackupFile(file);
+    }
+  };
+
+  const handleConfirmRestoreBackup = async () => {
+    const file = pendingBackupFile;
+    if (!file) return;
+    setRestoringBackup(true);
+    const result = await restoreBackupFirstRun(file);
+    if (result.ok) {
+      toast.success('Backup restored. Sign in with its admin password.', { duration: Infinity });
+      setPendingBackupFile(null);
+      setAdminConfigured(await fetchAdminConfigured());
+      setRestoringBackup(false);
+      return;
+    }
+    toast.error(result.error || 'Restore failed; no changes were made.');
+    setPendingBackupFile(null);
+    setRestoringBackup(false);
+    // A concurrent setup (another tab/device) may have completed first —
+    // re-check so we don't keep offering an endpoint that will now 409.
+    setAdminConfigured(await fetchAdminConfigured());
   };
 
   // A saved (remembered) login is restored during auth bootstrap. Once a real
@@ -236,6 +270,38 @@ export function Login() {
                 <Button type="submit" className="w-full" disabled={isLoading}>
                   {isLoading ? 'Saving...' : 'Set admin password'}
                 </Button>
+
+                <div className="flex items-center gap-3">
+                  <span className="h-px flex-1 bg-border" />
+                  <span className="text-xs uppercase tracking-wide text-muted-foreground">or</span>
+                  <span className="h-px flex-1 bg-border" />
+                </div>
+
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full"
+                  disabled={restoringBackup}
+                  onClick={() => backupFileInputRef.current?.click()}
+                >
+                  {restoringBackup ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Upload className="h-4 w-4" />
+                  )}
+                  {restoringBackup ? 'Restoring…' : 'Restore from a backup instead'}
+                </Button>
+                <p className="text-xs text-muted-foreground">
+                  Migrating from a previous print farm? Restoring a backup here also
+                  restores its admin password — you'll sign in with that afterward.
+                </p>
+                <input
+                  ref={backupFileInputRef}
+                  type="file"
+                  accept=".zip"
+                  className="hidden"
+                  onChange={handleBackupFileSelected}
+                />
               </form>
             ) : isAdminPage ? (
               <form onSubmit={handleSubmit} className="space-y-4">
@@ -309,92 +375,25 @@ export function Login() {
               </div>
             )}
 
-            {(oauthProviders.google || oauthProviders.microsoft || oauthProviders.adfs || oauthProviders.saml) &&
-              !showSetup && (
+            {oauthProviders.keycloak && !showSetup && (
               <>
                 <div className="flex items-center gap-3">
                   <span className="h-px flex-1 bg-border" />
                   <span className="text-xs uppercase tracking-wide text-muted-foreground">or</span>
                   <span className="h-px flex-1 bg-border" />
                 </div>
-                {oauthProviders.saml && (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="h-14 w-full gap-3 text-base"
-                    disabled={isLoading}
-                    onClick={() => {
-                      window.location.href = '/api/auth/saml/start';
-                    }}
-                  >
-                    <KeyRound className="size-5" />
-                    {oauthProviders.samlLabel || 'Sign in with SSO'}
-                  </Button>
-                )}
-                {oauthProviders.adfs && (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="h-14 w-full gap-3 text-base"
-                    disabled={isLoading}
-                    onClick={() => {
-                      window.location.href = '/api/auth/adfs/start';
-                    }}
-                  >
-                    <KeyRound className="size-5" />
-                    {oauthProviders.adfsLabel || 'Sign in with ADFS'}
-                  </Button>
-                )}
-                {oauthProviders.google && (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="h-14 w-full gap-3 text-base"
-                    disabled={isLoading}
-                    onClick={() => {
-                      window.location.href = '/api/auth/google/start';
-                    }}
-                  >
-                    <svg className="size-5" viewBox="0 0 24 24" aria-hidden="true">
-                      <path
-                        fill="#4285F4"
-                        d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 0 1-2.2 3.32v2.76h3.56c2.08-1.92 3.28-4.74 3.28-8.09Z"
-                      />
-                      <path
-                        fill="#34A853"
-                        d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.56-2.76c-.98.66-2.23 1.06-3.72 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84A11 11 0 0 0 12 23Z"
-                      />
-                      <path
-                        fill="#FBBC05"
-                        d="M5.84 14.11A6.6 6.6 0 0 1 5.5 12c0-.73.13-1.45.34-2.11V7.05H2.18A11 11 0 0 0 1 12c0 1.77.43 3.45 1.18 4.95l3.66-2.84Z"
-                      />
-                      <path
-                        fill="#EA4335"
-                        d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.05l3.66 2.84C6.71 7.31 9.14 5.38 12 5.38Z"
-                      />
-                    </svg>
-                    {oauthProviders.googleLabel || 'Sign in with Google'}
-                  </Button>
-                )}
-                {oauthProviders.microsoft && (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="h-14 w-full gap-3 text-base"
-                    disabled={isLoading}
-                    onClick={() => {
-                      window.location.href = '/api/auth/microsoft/start';
-                    }}
-                  >
-                    <svg className="size-5" viewBox="0 0 23 23" aria-hidden="true">
-                      <path fill="#F25022" d="M1 1h10v10H1z" />
-                      <path fill="#7FBA00" d="M12 1h10v10H12z" />
-                      <path fill="#00A4EF" d="M1 12h10v10H1z" />
-                      <path fill="#FFB900" d="M12 12h10v10H12z" />
-                    </svg>
-                    {oauthProviders.microsoftLabel || 'Sign in with Microsoft'}
-                  </Button>
-                )}
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="h-14 w-full gap-3 text-base"
+                  disabled={isLoading}
+                  onClick={() => {
+                    window.location.href = '/api/auth/keycloak/start';
+                  }}
+                >
+                  <KeyRound className="size-5" />
+                  {oauthProviders.keycloakLabel || 'Sign in with Keycloak'}
+                </Button>
               </>
             )}
 
@@ -410,6 +409,34 @@ export function Login() {
             </Button>
           </div>
         </Card>
+
+        <AlertDialog
+          open={pendingBackupFile !== null}
+          onOpenChange={(open) => !open && !restoringBackup && setPendingBackupFile(null)}
+        >
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Restore from backup?</AlertDialogTitle>
+              <AlertDialogDescription asChild>
+                <div className="space-y-2 text-left">
+                  <p>
+                    This loads <strong>{pendingBackupFile?.name}</strong> into this print
+                    farm, including its printers, filament inventory, queue history,
+                    settings, and its own admin password — replacing the fresh, empty
+                    database this instance started with. This cannot be undone.
+                  </p>
+                  <p>You'll sign in afterward using that backup's original admin password.</p>
+                </div>
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={restoringBackup}>Cancel</AlertDialogCancel>
+              <AlertDialogAction disabled={restoringBackup} onClick={() => void handleConfirmRestoreBackup()}>
+                Restore
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </div>
     </div>
   );

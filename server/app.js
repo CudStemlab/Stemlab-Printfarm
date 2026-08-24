@@ -21,7 +21,6 @@ import {
 } from './eventStream.js';
 import {
   approveManagerRequest,
-  buildBackupSnapshot,
   clearManagerRequestKeySecret,
   createDiscordWebhook,
   createManagerRequest,
@@ -96,10 +95,24 @@ import {
   markMaintenanceEventsNotified,
   recalcHealthScore,
   healthStatusFromScore,
-  reviveBackupTables,
-  restoreBackupSnapshot,
+  createBackupSource,
+  createUpdateRun,
+  getActiveUpdateRun,
+  getUpdateRun,
+  listUpdateRuns,
+  listUpdateRunEvents,
+  appendUpdateRunEvent,
+  transitionUpdateRun,
+  lastSuccessfulUpdateRun,
+  lastRollbackUpdateRun,
+  currentSchemaVersion,
 } from './postgres.js';
-import { createZip, readZip } from './zipArchive.js';
+import { ZipStreamWriter } from './zipStream.js';
+import {
+  BackupArchiveError,
+  restoreBackupArchive,
+  spoolRequestToTempFile,
+} from './backupArchive.js';
 import { verifySlicerGrant } from './slicerGrant.js';
 import { handleFilamentStation } from './filamentStation.js';
 import { sendBambuCommand } from './bambuCommands.js';
@@ -120,6 +133,8 @@ import {
   redisTtl,
 } from './redis.js';
 import { logger } from './logger.js';
+import { estimateFromModel } from './printEstimate.js';
+import { scheduleQueueEstimateBackfill } from './queueEstimateBackfill.js';
 import { requiredCapability, roleHasCapability, PUBLIC as RBAC_PUBLIC } from './rbac.js';
 import {
   classifyRoute,
@@ -139,19 +154,14 @@ import {
   verifyState,
 } from './oauthGrant.js';
 import {
-  buildAuthnRequest,
-  buildSpMetadata,
-  isValidCertificate,
-  isValidHttpUrl,
-  parseAndVerifySamlResponse,
-  SamlError,
-} from './samlSp.js';
-import {
   addCameraViewer,
   getAllCameraHealth,
   getCameraHealth,
   getCameraSnapshot,
 } from './bambuCamera.js';
+import { runUpdatePreflight } from './updatePreflight.js';
+import { normalizeSha, pollRollbackWorkflow, triggerRollbackWorkflow } from './updateRollback.js';
+import { DOCKER_REPO_PATTERN, resolvePublishedVersion } from './updateCheck.js';
 
 // Bambu Lab printers share one LAN integration (MQTT status/commands, port-6000
 // camera), so they're grouped rather than matched by a single model id.
@@ -188,13 +198,75 @@ const QUEUE_UPLOAD_MAX_BYTES = Number.parseInt(
 // A restore upload is a full backup archive (every table, including every
 // stored queue-job model file), so its ceiling is far higher than a single
 // print-request upload; the matching nginx location lifts its body cap to
-// the same value.
+// the same value. The archive is spooled to a temp file and read back through
+// the ZIP central directory, so this bounds disk use, not memory — which is
+// why the default can be generous.
 const BACKUP_UPLOAD_MAX_BYTES = Number.parseInt(
-  process.env.BACKUP_UPLOAD_MAX_BYTES ?? String(500 * 1024 * 1024),
+  process.env.BACKUP_UPLOAD_MAX_BYTES ?? String(2 * 1024 * 1024 * 1024),
   10,
 );
 // Print-request intake only accepts printable mesh formats (STL / 3MF / OBJ).
 const QUEUE_ALLOWED_FILE_EXT = new Set(['.stl', '.3mf', '.obj']);
+
+// ---------------------------------------------------------------------------
+// Single-container mode
+//
+// The default deployment splits the app across containers (web, slicer-proxy,
+// mcp, nginx, ...). The all-in-one image (Dockerfile.single) instead runs the
+// slicer proxy and the MCP server inside THIS process and drops nginx, so this
+// listener is the public port. Three env vars switch that on; every one of them
+// is off by default, leaving the multi-container behavior byte-identical.
+//
+//   EMBED_SLICER_PROXY=true  mount slicer-proxy/index.js at /printers/
+//   EMBED_MCP=true           mount mcp/httpHandler.js at /mcp
+//   METRICS_LISTEN_PORT=n    move /metrics off the public port onto its own
+//                            listener (nginx used to 404 it publicly)
+const EMBED_SLICER_PROXY = process.env.EMBED_SLICER_PROXY === 'true';
+const EMBED_MCP = process.env.EMBED_MCP === 'true';
+const METRICS_LISTEN_PORT = Number.parseInt(process.env.METRICS_LISTEN_PORT || '0', 10) || 0;
+// Fail-closed like the nginx gate it replaces: the embedded MCP path answers 403
+// unless explicitly published. Internal callers of a standalone mcp container
+// were never affected by this flag and still aren't.
+const MCP_HTTP_PUBLIC = process.env.MCP_HTTP_PUBLIC === 'true';
+// Whether X-Real-IP / X-Forwarded-For may be believed (see getClientIp). True by
+// default because the split stack always has nginx in front; the single-container
+// compose file sets it false unless an external reverse proxy is configured.
+const TRUST_PROXY_HEADERS = (process.env.TRUST_PROXY_HEADERS ?? 'true') !== 'false';
+
+// Populated below by dynamic import when the corresponding EMBED_* flag is set —
+// static imports would pull the proxy's DB/FTP/MQTT stack and the MCP SDK into
+// every multi-container web image, where neither is installed.
+let embeddedSlicerProxy = null;
+let embeddedMcpHandler = null;
+
+// Mirrors the nginx `location /printers/` block: the slicer's base URL is
+// /printers/<id>, and its "Device" tab also hits the bare /printers/<id> with no
+// trailing slash.
+function isSlicerProxyPath(pathname) {
+  return pathname === '/printers' || pathname.startsWith('/printers/');
+}
+
+// Mirrors the nginx `location /mcp` block (prefix match, so /mcp and /mcp/... ).
+function isMcpPath(pathname) {
+  return pathname === '/mcp' || pathname.startsWith('/mcp/');
+}
+
+async function loadEmbeddedServices() {
+  if (EMBED_SLICER_PROXY) {
+    const mod = await import('../slicer-proxy/index.js');
+    embeddedSlicerProxy = mod.handleSlicerProxyRequest;
+    logger.info('embedded slicer proxy mounted', { path: '/printers/' });
+  }
+  if (EMBED_MCP) {
+    const mod = await import('../mcp/httpHandler.js');
+    // Loopback back into this same process's /api/v1 surface: the MCP server is
+    // a thin API client, so it authenticates with the caller's key exactly as it
+    // does over the network — no privileged in-process shortcut.
+    const apiBase = process.env.PRINTFARM_API_BASE || `http://127.0.0.1:${process.env.PORT || 5173}`;
+    embeddedMcpHandler = mod.createMcpHttpHandler({ apiBase });
+    logger.info('embedded mcp server mounted', { path: '/mcp', public: MCP_HTTP_PUBLIC });
+  }
+}
 
 // Google Form (print-request) URL — retained for the Settings → Integrations
 // override, though the in-app form at /request is now the primary intake path.
@@ -609,62 +681,34 @@ function isValidIanaTimezone(timezone) {
   }
 }
 
-// OAuth (SSO) sign-in config. Two providers are supported — Google and Microsoft
-// Entra ID (Azure AD) — and each is configured independently in Settings →
-// Sign-in (client id/secret, optional allowed-email-domain list, and, for
-// Microsoft, the directory tenant). Config is persisted per provider in
-// app_settings. Anyone who authenticates this way is granted the read-only
-// `student` role. The clientSecret is never returned by a read path — only
-// whether one is configured.
+// OAuth (SSO) sign-in config. Keycloak is the sole supported provider (Google,
+// Microsoft/Entra ID, and ADFS were removed — this used to be a multi-provider
+// registry; kept as a single-entry object rather than inlining its fields so
+// adding a provider back stays a small diff). Configured in Settings →
+// Sign-in (client id/secret, optional allowed-email-domain list, authority +
+// realm). Config is persisted in app_settings. Anyone who authenticates this
+// way is granted the read-only `student` role. The clientSecret is never
+// returned by a read path — only whether one is configured.
 //
-// Both providers speak OAuth 2.0 Authorization Code + OIDC, so they differ only
-// in their authorize/token endpoints (Microsoft's are tenant-scoped) and in which
-// id_token claim carries the email (Google: `email`; Microsoft often only
-// `preferred_username`/`upn`). The registry below captures those differences.
+// Keycloak speaks OAuth 2.0 Authorization Code + OIDC, scoping every endpoint
+// under a realm: <authority>/realms/<realm>/protocol/openid-connect/*. Both
+// `authority` (the Keycloak server base URL, e.g. https://keycloak.example.com)
+// and `realm` are required — the provider is not considered configured without
+// them. Each derived endpoint may be overridden explicitly when an instance
+// uses non-standard paths.
 const OAUTH_PROVIDERS = {
-  google: {
-    settingsKey: 'oauth_google',
-    label: 'Google',
-    usesTenant: false,
-    authorizeEndpoint: () => 'https://accounts.google.com/o/oauth2/v2/auth',
-    tokenEndpoint: () => 'https://oauth2.googleapis.com/token',
-  },
-  microsoft: {
-    settingsKey: 'oauth_microsoft',
-    label: 'Microsoft',
-    usesTenant: true,
-    // Two modes. With an `authority` set (on-prem AD FS, e.g.
-    // https://sso.example.com/adfs) the OIDC endpoints are <authority>/oauth2/*.
-    // Otherwise fall back to Microsoft cloud (Entra ID), which is tenant-scoped.
+  keycloak: {
+    settingsKey: 'oauth_keycloak',
+    label: 'Keycloak',
     authorizeEndpoint: (config) =>
-      config.authority
-        ? `${config.authority.replace(/\/+$/, '')}/oauth2/authorize`
-        : `https://login.microsoftonline.com/${encodeURIComponent(
-            config.tenant || 'common',
-          )}/oauth2/v2.0/authorize`,
+      config.authorizeEndpoint ||
+      `${config.authority.replace(/\/+$/, '')}/realms/${encodeURIComponent(config.realm)}/protocol/openid-connect/auth`,
     tokenEndpoint: (config) =>
-      config.authority
-        ? `${config.authority.replace(/\/+$/, '')}/oauth2/token`
-        : `https://login.microsoftonline.com/${encodeURIComponent(
-            config.tenant || 'common',
-          )}/oauth2/v2.0/token`,
-  },
-  // ADFS — endpoints are derived from the `authority` base URL configured in
-  // Settings → Sign-in. `authority` is required; the provider is not considered
-  // configured without it. The redirect_uri is the fixed path
-  // /api/auth/oauth2_redirect as registered with the IdP.
-  adfs: {
-    settingsKey: 'oauth_adfs',
-    label: 'ADFS',
-    usesTenant: false,
-    requiresAuthority: true,
-    authorizeEndpoint: (config) =>
-      config.authorizeEndpoint || `${config.authority.replace(/\/+$/, '')}/oauth2/authorize`,
-    tokenEndpoint: (config) =>
-      config.tokenEndpoint || `${config.authority.replace(/\/+$/, '')}/oauth2/token`,
+      config.tokenEndpoint ||
+      `${config.authority.replace(/\/+$/, '')}/realms/${encodeURIComponent(config.realm)}/protocol/openid-connect/token`,
     logoutEndpoint: (config) =>
-      config.logoutEndpoint || `${config.authority.replace(/\/+$/, '')}/oauth2/logout`,
-    callbackPath: '/api/auth/oauth2_redirect',
+      config.logoutEndpoint ||
+      `${config.authority.replace(/\/+$/, '')}/realms/${encodeURIComponent(config.realm)}/protocol/openid-connect/logout`,
   },
 };
 const OAUTH_SCOPE = 'openid email profile';
@@ -699,46 +743,39 @@ async function getOAuthConfig(providerName) {
     enabled,
     clientId,
     clientSecret,
-    tenant: typeof stored.tenant === 'string' ? stored.tenant.trim() : '',
-    // On-prem AD FS authority base (e.g. https://host/adfs); blank = use cloud.
+    // Keycloak server base URL, combined with `realm` to derive the OIDC endpoints.
     authority: typeof stored.authority === 'string' ? stored.authority.trim() : '',
+    realm: typeof stored.realm === 'string' ? stored.realm.trim() : '',
     allowedDomains,
     // Custom label shown on the login-page sign-in button (e.g. "Sign in with Satit-M").
     // Falls back to the provider's built-in label when blank.
     displayName: typeof stored.displayName === 'string' ? stored.displayName.trim() : '',
-    // ADFS: the full redirect_uri pre-registered with the IdP. When set, used
-    // verbatim instead of computing it from request headers (which breaks behind
-    // a TLS-terminating proxy that doesn't forward X-Forwarded-Proto/Host).
+    // The full redirect_uri pre-registered with the IdP. When set, used verbatim
+    // instead of computing it from request headers (which breaks behind a
+    // TLS-terminating proxy that doesn't forward X-Forwarded-Proto/Host).
     redirectUri: typeof stored.redirectUri === 'string' ? stored.redirectUri.trim() : '',
     authorizeEndpoint: typeof stored.authorizeEndpoint === 'string' ? stored.authorizeEndpoint.trim() : '',
     tokenEndpoint: typeof stored.tokenEndpoint === 'string' ? stored.tokenEndpoint.trim() : '',
     logoutEndpoint: typeof stored.logoutEndpoint === 'string' ? stored.logoutEndpoint.trim() : '',
     metadataUrl: typeof stored.metadataUrl === 'string' ? stored.metadataUrl.trim() : '',
     jwksUri: typeof stored.jwksUri === 'string' ? stored.jwksUri.trim() : '',
-    relyingPartyId: typeof stored.relyingPartyId === 'string' ? stored.relyingPartyId.trim() : '',
   };
 }
 
-// True only when the flow can actually run: enabled + credentials + any
-// provider-specific required fields (Microsoft needs tenant or authority; ADFS
-// needs authority since its endpoints are derived from it).
+// True only when the flow can actually run: enabled + credentials + authority + realm.
 function isOAuthConfigured(config) {
   if (!config || !config.enabled || !config.clientId || !config.clientSecret) {
     return false;
   }
-  const provider = getOAuthProvider(config.provider);
-  if (provider?.usesTenant && !config.tenant && !config.authority) {
-    return false;
-  }
-  if (provider?.requiresAuthority && !config.authority) {
+  if (!config.authority || !config.realm) {
     return false;
   }
   return true;
 }
 
-// Pull the user's email out of the id_token claims. Google always populates
-// `email`; Microsoft Entra ID commonly omits it and carries the address in
-// `preferred_username` (or `upn`), so fall back across all three.
+// Pull the user's email out of the id_token claims. Keycloak populates `email`
+// by default; fall back across other common claims in case an instance is
+// configured to omit it.
 function oauthClaimEmail(claims) {
   if (!claims) {
     return '';
@@ -787,7 +824,7 @@ function normalizePrinterCallbackUrl(raw) {
 }
 
 // Strip a trailing slash so callers can safely append a path (e.g.
-// "/api/auth/saml/acs"). Does not validate scheme — the PUT handler does that.
+// "/api/auth/keycloak/callback"). Does not validate scheme — the PUT handler does that.
 function normalizeSsoPublicUrl(raw) {
   const base = String(raw || '').trim();
   return base ? base.replace(/\/+$/, '') : '';
@@ -798,8 +835,8 @@ async function getSsoPublicUrl() {
   return normalizeSsoPublicUrl(stored?.publicUrl);
 }
 
-// The public origin used to build OAuth redirect_uri / SAML ACS URLs, resolved in
-// priority order: (1) the admin-set Settings → Sign-in value, (2) the APP_BASE_URL
+// The public origin used to build the OAuth redirect_uri, resolved in priority
+// order: (1) the admin-set Settings → Sign-in value, (2) the APP_BASE_URL
 // env var, (3) the request headers (X-Forwarded-Proto/-Host, Host) — which only
 // work correctly when the reverse proxy forwards them. The redirect_uri must match
 // this exactly and be registered with the provider (Google Cloud console / Azure
@@ -818,17 +855,16 @@ async function resolvePublicOrigin(req) {
 
 async function oauthRedirectUri(req, providerName, config = null) {
   // Use the stored redirect URI when set — avoids relying on proxy headers to
-  // reconstruct the origin (required for ADFS whose URI is pre-registered).
+  // reconstruct the origin (useful behind a proxy that doesn't forward them,
+  // or when the IdP has a pre-registered exact URI on file).
   if (config?.redirectUri) return config.redirectUri;
-  const provider = getOAuthProvider(providerName);
-  const path = provider?.callbackPath ?? `/api/auth/${providerName}/callback`;
-  return `${await resolvePublicOrigin(req)}${path}`;
+  return `${await resolvePublicOrigin(req)}/api/auth/${providerName}/callback`;
 }
 
 // Establish a real server session for an SSO-authenticated identity and bounce
-// the browser to the dashboard. Both the OAuth callback and the SAML ACS call
-// this once the provider's assertion is verified and the final role resolved.
-// Setting the HttpOnly session cookie server-side here — instead of handing the
+// the browser to the dashboard. The OAuth callback calls this once the
+// provider's token exchange is verified and the role resolved. Setting the
+// HttpOnly session cookie server-side here — instead of handing the
 // browser a signed grant as `?oauth_grant=<token>` for it to exchange — keeps the
 // auth token out of the URL, and therefore out of the DevTools network log,
 // browser history, access logs, and Referer headers. That closes a replay window:
@@ -856,9 +892,8 @@ async function establishSsoSession(req, res, { provider, sub, email, name, role 
   sendRedirect(res, '/');
 }
 
-// Shared Authorization Code exchange + identity extraction. Used by both the
-// standard /api/auth/:provider/callback routes and the fixed
-// /api/auth/oauth2_redirect path registered for ADFS.
+// Authorization Code exchange + identity extraction for the
+// /api/auth/:provider/callback route.
 async function oauthExchangeCallback(req, res, requestUrl, providerName) {
   const provider = OAUTH_PROVIDERS[providerName];
   const config = await getOAuthConfig(providerName);
@@ -897,8 +932,8 @@ async function oauthExchangeCallback(req, res, requestUrl, providerName) {
     // the signature; we only need the identity fields out of the payload.
     const claims = decodeJwtClaims(tokens.id_token);
     const email = oauthClaimEmail(claims);
-    // Google sets email_verified; Microsoft / ADFS omit it (institutional accounts
-    // are verified at directory level), so only reject when explicitly false.
+    // Keycloak sets email_verified when the realm tracks it; some setups omit
+    // it entirely, so only reject when explicitly false.
     if (!email || claims?.email_verified === false) {
       sendRedirect(res, '/login?oauth_error=unverified_email');
       return;
@@ -920,61 +955,6 @@ async function oauthExchangeCallback(req, res, requestUrl, providerName) {
   } catch {
     sendRedirect(res, '/login?oauth_error=exchange_failed');
   }
-}
-
-// SAML 2.0 SSO (the dashboard is the Service Provider). Like OAuth, config lives
-// in app_settings and is read fresh on every request, so an admin can change it
-// in Settings → SSO Configuration with no restart. On a valid assertion the ACS
-// establishes the server session directly (establishSsoSession) and redirects to
-// the dashboard — no auth token is placed in the URL.
-const SAML_SETTINGS_KEY = 'saml_sso';
-// Roles an asserted `role` attribute may map onto; anything else falls back to
-// the read-only `student` role (matching the OAuth default).
-const SAML_ALLOWED_ROLES = new Set(['admin', 'operator', 'viewer', 'student']);
-const SAML_DEFAULT_ROLE = 'student';
-
-// Default SP identifiers derived from the public origin when an admin leaves the
-// fields blank. These are also what the metadata endpoint advertises.
-async function defaultSamlSpEntityId(req) {
-  return `${await resolvePublicOrigin(req)}/api/auth/saml/metadata`;
-}
-async function defaultSamlAcsUrl(req) {
-  return `${await resolvePublicOrigin(req)}/api/auth/saml/acs`;
-}
-
-async function getSamlConfig() {
-  const stored = (await getAppSetting(SAML_SETTINGS_KEY)) || {};
-  return {
-    enabled: stored.enabled === true,
-    idpEntityId: typeof stored.idpEntityId === 'string' ? stored.idpEntityId.trim() : '',
-    idpSsoUrl: typeof stored.idpSsoUrl === 'string' ? stored.idpSsoUrl.trim() : '',
-    idpCertificate: typeof stored.idpCertificate === 'string' ? stored.idpCertificate.trim() : '',
-    spEntityId: typeof stored.spEntityId === 'string' ? stored.spEntityId.trim() : '',
-    acsUrl: typeof stored.acsUrl === 'string' ? stored.acsUrl.trim() : '',
-    autoProvisionUsers: stored.autoProvisionUsers === true,
-    updatedAt: typeof stored.updatedAt === 'string' ? stored.updatedAt : null,
-    displayName: typeof stored.displayName === 'string' ? stored.displayName.trim() : '',
-  };
-}
-
-// True only when the flow can actually run: enabled, with an IdP SSO URL and a
-// signing certificate to verify assertions against.
-function isSamlConfigured(config) {
-  return Boolean(config && config.enabled && config.idpSsoUrl && config.idpCertificate);
-}
-
-// Resolve the effective SP entity id / ACS URL, falling back to the request
-// origin when an admin left them blank.
-async function resolveSamlEndpoints(config, req) {
-  return {
-    spEntityId: config.spEntityId || (await defaultSamlSpEntityId(req)),
-    acsUrl: config.acsUrl || (await defaultSamlAcsUrl(req)),
-  };
-}
-
-// Map an asserted role onto an allowed dashboard role; unknown/blank → student.
-function normalizeSamlRole(role) {
-  return SAML_ALLOWED_ROLES.has(role) ? role : SAML_DEFAULT_ROLE;
 }
 
 // Send a 302 to a path/URL on the dashboard (or the provider). Used by the OAuth
@@ -1188,49 +1168,129 @@ function runningVersion() {
   return APP_VERSION || BUILD_ID;
 }
 
-// Admin "update available" check config. UPDATE_CHECK_REPO ("owner/repo") turns
-// the feature on; when unset the endpoint reports { enabled: false } and the UI
-// hides the card. UPDATE_CHECK_TOKEN (optional) lifts GitHub's 60-req/hr
-// unauthenticated limit / reaches private repos. The one-click apply calls a
-// Watchtower sidecar's HTTP API (WATCHTOWER_URL + WATCHTOWER_TOKEN).
+// Whether runningVersion() is a real git SHA we can compare against the
+// published image's sha-* tag, or just the index.html hash we fall back to. This
+// distinction matters: BUILD_ID is 16 hex chars that never equal 'dev' and never
+// prefix-match a commit SHA, so a bare `node server/app.js` run (no Docker, so no
+// baked APP_VERSION) with the check configured would otherwise report a
+// permanent, un-actionable "update available". Treat anything that isn't a
+// stamped SHA as unstamped.
+function versionSource() {
+  if (!APP_VERSION) return 'build-id';
+  if (APP_VERSION === 'dev') return 'dev';
+  return 'baked';
+}
+function isVersionComparable() {
+  return versionSource() === 'baked';
+}
+
+// Admin "update available" check config.
+//
+// The check asks DOCKER HUB what is published, not GitHub what is committed —
+// because a commit is not installable until CI has built and pushed it. Under
+// the old GitHub check, pushing to main immediately showed "update available"
+// and an admin who pulled during the ~5 minutes CI takes would get the *old*
+// image and be told to update again; a failed build showed an update that could
+// never be applied at all. The registry is the only source that answers the
+// question actually being asked: is there a newer image I can pull right now?
+//
+// UPDATE_CHECK_IMAGE ("namespace/repo" on Docker Hub) turns the feature on —
+// it defaults to <IMAGE_PREFIX>/printfarm, so setting IMAGE_PREFIX alone is
+// enough. When neither is set the endpoint reports { enabled: false } and the
+// UI hides the card. UPDATE_CHECK_TOKEN (optional) is sent as a bearer token
+// for private repositories / a higher rate limit.
+//
+// UPDATE_CHECK_REPO ("owner/repo") is still needed, but only for ROLLBACK: it
+// is the repository whose rollback.yml workflow gets dispatched.
 const UPDATE_CHECK_REPO = (process.env.UPDATE_CHECK_REPO || '').trim();
 const UPDATE_CHECK_BRANCH = (process.env.UPDATE_CHECK_BRANCH || 'main').trim();
 const UPDATE_CHECK_TOKEN = (process.env.UPDATE_CHECK_TOKEN || '').trim();
+const IMAGE_PREFIX = (process.env.IMAGE_PREFIX || '').trim();
+const UPDATE_CHECK_IMAGE = (
+  process.env.UPDATE_CHECK_IMAGE || (IMAGE_PREFIX ? `${IMAGE_PREFIX}/printfarm` : '')
+).trim();
+// The moving tag a host actually pulls. Its digest is resolved back to the
+// immutable sha-<12> tag CI pushed alongside it, which is what gets compared
+// against the running APP_VERSION.
+const UPDATE_CHECK_TAG = (process.env.UPDATE_CHECK_TAG || 'latest').trim();
+
 const UPDATE_CHECK_TTL_MS = Number.parseInt(process.env.UPDATE_CHECK_TTL_MS || String(20 * 60 * 1000), 10);
 const WATCHTOWER_URL = (process.env.WATCHTOWER_URL || 'http://watchtower:8080/v1/update').trim();
 const WATCHTOWER_TOKEN = (process.env.WATCHTOWER_TOKEN || '').trim();
-// Cached latest-commit lookup, shared across admins so GitHub is polled at most
-// once per TTL regardless of how many browsers are watching.
-let updateCheckCache = null; // { latest, latestCommittedAt, checkedAt }
+// Rollback config. UPDATE_ROLLBACK_TOKEN is a fine-grained GitHub PAT with
+// `Actions: write` on UPDATE_CHECK_REPO only — it dispatches the rollback
+// workflow that re-points the :latest image tags (see server/updateRollback.js
+// for why the registry write deliberately does not happen in this container).
+const UPDATE_ROLLBACK_TOKEN = (process.env.UPDATE_ROLLBACK_TOKEN || '').trim();
+const UPDATE_ROLLBACK_WORKFLOW = (process.env.UPDATE_ROLLBACK_WORKFLOW || 'rollback.yml').trim();
+// How long a whole run may take (pull + recreate + verify) before the watchdog
+// marks it timed_out, and how many consecutive readiness passes the new version
+// must post to count as succeeded. More than one pass is the point: a container
+// that boots on the new SHA and then crash-loops would otherwise be reported as
+// a successful update, which is exactly the failure this feature has to catch.
+const UPDATE_RUN_DEADLINE_MS = Number.parseInt(process.env.UPDATE_RUN_DEADLINE_MS || String(15 * 60 * 1000), 10);
+const UPDATE_HEALTH_PASSES = Math.max(1, Number.parseInt(process.env.UPDATE_HEALTH_PASSES || '3', 10));
+// Minimum spacing between the health probes that make up those passes — three
+// checks a millisecond apart would prove nothing about a container that stays up.
+const UPDATE_HEALTH_PASS_SPACING_MS = 5000;
+// Cached published-image lookup, shared across admins so Docker Hub is polled at
+// most once per TTL regardless of how many browsers are watching. The field name
+// `latestCommittedAt` is kept (the client already reads it) but now carries the
+// image's push time rather than a commit date.
+let updateCheckCache = null; // { latest, latestCommittedAt, checkedAt, digest, matchedByDigest }
 
-async function fetchLatestCommit(force = false) {
-  if (!UPDATE_CHECK_REPO) return null;
-  const now = Date.now();
-  // A manual "Check again" (force) bypasses the TTL cache so a just-pushed
-  // commit shows up immediately instead of after the cache window.
-  if (!force && updateCheckCache && now - updateCheckCache.checkedAt < UPDATE_CHECK_TTL_MS) {
-    return updateCheckCache;
-  }
-  const url = `https://api.github.com/repos/${UPDATE_CHECK_REPO}/commits/${encodeURIComponent(UPDATE_CHECK_BRANCH)}`;
-  const headers = { Accept: 'application/vnd.github+json', 'User-Agent': 'printfarm-update-check' };
+async function hubFetch(path) {
+  const headers = { Accept: 'application/json', 'User-Agent': 'printfarm-update-check' };
+  // Private repositories / a higher rate limit. Anonymous works for public ones.
   if (UPDATE_CHECK_TOKEN) headers.Authorization = `Bearer ${UPDATE_CHECK_TOKEN}`;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 8000);
   try {
-    const resp = await fetch(url, { headers, signal: controller.signal });
+    const resp = await fetch(`https://hub.docker.com/v2/repositories/${path}`, {
+      headers,
+      signal: controller.signal,
+    });
     if (!resp.ok) {
-      throw new Error(`GitHub responded ${resp.status}`);
+      // Message stays generic: it reaches an admin-visible error field, and the
+      // registry path can carry a private namespace.
+      throw new Error(`registry responded ${resp.status}`);
     }
-    const data = await resp.json();
-    const latest = typeof data?.sha === 'string' ? data.sha : null;
-    if (!latest) throw new Error('GitHub response missing sha');
-    const latestCommittedAt =
-      data?.commit?.committer?.date || data?.commit?.author?.date || null;
-    updateCheckCache = { latest, latestCommittedAt, checkedAt: now };
-    return updateCheckCache;
+    return await resp.json();
   } finally {
     clearTimeout(timer);
   }
+}
+
+// Resolves what a `docker compose pull` would actually bring down: the digest
+// behind the moving tag, mapped back to the immutable sha-<12> tag CI pushed with
+// it, which is directly comparable to the running APP_VERSION.
+async function fetchLatestPublishedVersion(force = false) {
+  if (!UPDATE_CHECK_IMAGE) return null;
+  if (!DOCKER_REPO_PATTERN.test(UPDATE_CHECK_IMAGE)) {
+    throw new Error('UPDATE_CHECK_IMAGE is not a valid "namespace/repository" name');
+  }
+  const now = Date.now();
+  // A manual "Check again" (force) bypasses the TTL cache so a just-pushed image
+  // shows up immediately instead of after the cache window.
+  if (!force && updateCheckCache && now - updateCheckCache.checkedAt < UPDATE_CHECK_TTL_MS) {
+    return updateCheckCache;
+  }
+
+  const moving = await hubFetch(
+    `${UPDATE_CHECK_IMAGE}/tags/${encodeURIComponent(UPDATE_CHECK_TAG)}`,
+  );
+  // Newest first, so resolvePublishedVersion's fallback picks the latest build.
+  const list = await hubFetch(`${UPDATE_CHECK_IMAGE}/tags?page_size=100&ordering=last_updated`);
+  const resolved = resolvePublishedVersion(moving, list?.results);
+
+  updateCheckCache = {
+    latest: resolved.version,
+    latestCommittedAt: resolved.publishedAt,
+    checkedAt: now,
+    digest: resolved.digest,
+    matchedByDigest: resolved.matchedByDigest,
+  };
+  return updateCheckCache;
 }
 
 const port = Number.parseInt(process.env.PORT || '5173', 10);
@@ -1445,7 +1505,16 @@ function staffUserWithHash(record) {
 // header), then the socket peer. Reading the rightmost token means a client that
 // injects its own `X-Forwarded-For: <fake>` can no longer mint a fresh rate-limit
 // bucket per request.
+//
+// That reasoning holds only while a trusted proxy is actually in front. In the
+// single-container build nginx is gone, so unless an external reverse proxy sets
+// these headers the peer is the client itself and every forwarding header is
+// attacker-supplied — TRUST_PROXY_HEADERS=false ignores them and uses the socket
+// peer alone. Default stays true (the multi-container stack always has nginx).
 function getClientIp(req) {
+  if (!TRUST_PROXY_HEADERS) {
+    return req.socket?.remoteAddress || null;
+  }
   const realIp = req.headers['x-real-ip'];
   if (typeof realIp === 'string' && realIp.trim()) {
     return realIp.trim();
@@ -1604,7 +1673,7 @@ function readSessionToken(req) {
 
 function buildSessionCookie(req, value, maxAgeSeconds, name = sessionCookieName(req)) {
   // SameSite=Lax (not Strict) so the cookie survives the top-level redirect back
-  // from an OAuth/SAML IdP, while still blocking cross-site POST CSRF.
+  // from the OAuth IdP, while still blocking cross-site POST CSRF.
   const attrs = [
     `${name}=${value}`,
     'Path=/',
@@ -1741,6 +1810,17 @@ const LIVE_TELEMETRY_FIELDS = [
   'spools', 'fanSpeeds',
 ];
 
+// Fields the poller mirrors as a RAW string (telemetry.Publish writes Go strings
+// verbatim and JSON-encodes everything else). They must never be JSON.parse'd
+// back: a message that happens to be valid JSON on its own — a bare numeric
+// error code, `true`, `[...]` — would silently come back as a number/bool/array
+// and change the field's type versus the Postgres read. That type flip breaks
+// every consumer that (correctly) expects a string: the dashboard's
+// `errorMessage.trim()`, and the Orca client's `get<std::string>()`, which
+// throws and blanks its whole printer list. `null` is the one encoded value the
+// poller can send here (json.Marshal of a nil errorMessage).
+const LIVE_TELEMETRY_STRING_FIELDS = new Set(['status', 'errorMessage', 'offlineSince']);
+
 async function overlayLiveTelemetry(printer) {
   if (!isRedisEnabled() || !printer || !printer.id) {
     return printer;
@@ -1753,8 +1833,13 @@ async function overlayLiveTelemetry(printer) {
     if (live[field] === undefined) {
       continue;
     }
-    // The poller stores strings raw and everything else JSON-encoded, so parse
-    // and fall back to the raw value for plain strings (status, offlineSince…).
+    // The poller stores strings raw and everything else JSON-encoded. String
+    // fields are taken verbatim (see LIVE_TELEMETRY_STRING_FIELDS) so their type
+    // can never flip; the literal 'null' is the poller's encoding of "no value".
+    if (LIVE_TELEMETRY_STRING_FIELDS.has(field)) {
+      printer[field] = live[field] === 'null' ? null : live[field];
+      continue;
+    }
     try {
       printer[field] = JSON.parse(live[field]);
     } catch {
@@ -1835,6 +1920,10 @@ const PUBLIC_QUEUE_FIELDS = [
   'progress',
   'estimatedTime',
   'timeRemaining',
+  // Derived from the model file, not from the submitter — no PII, and the same
+  // operational value the public queue view already gets from estimatedTime.
+  'estimatedFilament',
+  'estimateSource',
   'filamentUsed',
   'priority',
   // stlFileUrl / hasFile deliberately omitted: the file download is staff-only
@@ -2143,10 +2232,9 @@ async function authorizeFrontendApi(req, res, requestUrl) {
   // already keeps the session cookie off cross-site writes; this is a second,
   // independent control — a state-changing request must originate from our own
   // site. Only non-public mutations reach here (the public intake endpoints —
-  // login, SAML ACS, manager request, queue submit — resolve to PUBLIC above,
-  // so the IdP's cross-origin ACS POST and the CORS manager API are unaffected).
-  // GET/HEAD are exempt (not state-changing). The key-gated /api/v1 surface is
-  // separate and never reaches this gate.
+  // login, manager request, queue submit — resolve to PUBLIC above, so the
+  // CORS manager API is unaffected). GET/HEAD are exempt (not state-changing).
+  // The key-gated /api/v1 surface is separate and never reaches this gate.
   const method = (req.method || 'GET').toUpperCase();
   if (method !== 'GET' && method !== 'HEAD' && !isSameOriginWrite(req)) {
     sendJson(res, 403, { error: 'Cross-origin request blocked.' });
@@ -2871,9 +2959,8 @@ async function buildStatusLightProvisioning() {
   const credential = await ensureBrokerCredential();
   return {
     enabled: true,
-    // The host port compose publishes the raw-TCP listener on (container
-    // always listens on 1883; the ws/wss transport rides the normal web port).
-    mqttPort: Number.parseInt(process.env.MQTT_PORT || '1883', 10) || 1883,
+    // wss-only: the broker has no raw-TCP listener, so there is no separate
+    // port to hand back — devices dial the site's normal HTTPS port at wsPath.
     wsPath: '/mqtt',
     username: credential.username,
     password: credential.password,
@@ -3126,11 +3213,12 @@ async function handleDataApiPrinters(req, res, { apiKey, method, id, sub, action
       type,
       color,
       vendor,
+      routine,
     } = await readJsonBody(req);
     await sendBambuCommand(printer, command, {
-      heater, target, nozzleIndex, gcode, trayId, fanPort, speed, modeId, submode, type, color, vendor,
+      heater, target, nozzleIndex, gcode, trayId, fanPort, speed, modeId, submode, type, color, vendor, routine,
     });
-    auditDataApi(req, apiKey, 'printer.command', id, { command });
+    auditDataApi(req, apiKey, 'printer.command', id, { command, routine });
     sendEmpty(res);
     return true;
   }
@@ -3813,6 +3901,55 @@ async function handleDataApiManagerRequests(req, res, { apiKey, method, id, sub 
   return dataApiMethodNotAllowed(res);
 }
 
+// Spools a backup-archive upload, restores it inside one transaction, and
+// audits the result. Shared by the authenticated /api/admin/backup/restore
+// route and the pre-auth /api/admin/backup/restore-first-run variant below;
+// `session` is only used for audit attribution, so it's `null` for the
+// first-run caller. Throws an Error with a `.status` on any failure — the
+// caller sends the response either way, since the two routes' 409 handling
+// differs upstream of this shared step.
+async function restoreBackupUpload(req, session) {
+  let upload;
+  try {
+    upload = await spoolRequestToTempFile(req, BACKUP_UPLOAD_MAX_BYTES);
+  } catch (error) {
+    if (error instanceof BackupArchiveError && error.tooLarge) {
+      const limitMb = Math.round(BACKUP_UPLOAD_MAX_BYTES / (1024 * 1024));
+      throw Object.assign(new Error(`Backup archive exceeds the ${limitMb} MB upload limit.`), { status: 413 });
+    }
+    logger.error('backup upload failed', { err: error instanceof Error ? error.message : error });
+    throw Object.assign(new Error('Could not read the uploaded archive.'), { status: 500 });
+  }
+
+  let manifest = null;
+  let restoredTables = [];
+  try {
+    const result = await restoreBackupArchive(upload.path);
+    manifest = result.manifest;
+    restoredTables = result.tables;
+  } catch (error) {
+    if (error instanceof BackupArchiveError) {
+      throw Object.assign(new Error(error.message), { status: 400 });
+    }
+    logger.error('backup restore failed', { err: error instanceof Error ? error.message : error });
+    throw Object.assign(new Error('Restore failed; no changes were committed.'), { status: 500 });
+  } finally {
+    await upload.cleanup();
+  }
+
+  await recordAuditLog({
+    actorName: session ? session.name : null,
+    actorUsername: session ? session.username : null,
+    actorRole: session ? session.role : null,
+    action: 'backup.restore',
+    target: null,
+    details: { sourceGeneratedAt: manifest?.generatedAt || null, tables: restoredTables },
+    source: 'web',
+    ip: getClientIp(req),
+  });
+  return restoredTables;
+}
+
 async function handleApi(req, res, requestUrl) {
   if (requestUrl.pathname === '/healthz') {
     sendJson(res, 200, { ok: true }, 'no-store');
@@ -4121,6 +4258,7 @@ async function handleApi(req, res, requestUrl) {
       type,
       color,
       vendor,
+      routine,
     } = await readJsonBody(req);
     await sendBambuCommand(printer, command, {
       heater,
@@ -4135,6 +4273,7 @@ async function handleApi(req, res, requestUrl) {
       type,
       color,
       vendor,
+      routine,
     });
     // Optimistic write so the displayed target reflects what was just sent —
     // see setPrinterTemperatureTarget's comment for why this is needed
@@ -4441,7 +4580,24 @@ async function handleApi(req, res, requestUrl) {
       course ? `Course: ${course}` : '',
       noteText,
     ].filter(Boolean);
-    const estimatedTime = Math.max(30, quantity * 60);
+    // Estimate print time and filament from the uploaded model. Best-effort:
+    // an unparseable or oversized file leaves the old quantity-derived
+    // placeholder in place and records no source, exactly like a job submitted
+    // before this existed. A parse failure must never fail a submission.
+    let estimatedTime = Math.max(30, quantity * 60);
+    let estimatedFilamentGrams = null;
+    let estimateSource = 'none';
+    try {
+      const estimate = await estimateFromModel(file.content, file.filename, { pieces: quantity });
+      if (estimate) {
+        estimatedTime = estimate.minutes;
+        estimatedFilamentGrams = estimate.grams;
+        estimateSource = estimate.source;
+      }
+    } catch (error) {
+      logger.warn('failed to estimate queue submission', error);
+    }
+
     const id = `queue-${createHash('sha1')
       .update(`${submittedAt.toISOString()}|${studentId || submitterName}|${file.filename}`)
       .digest('hex')
@@ -4457,6 +4613,8 @@ async function handleApi(req, res, requestUrl) {
       submittedAt,
       priority: quantity >= 3 ? 'high' : quantity >= 2 ? 'medium' : 'low',
       estimatedTime,
+      estimatedFilamentGrams,
+      estimateSource,
       fileContent: file.content,
       fileMime: file.mimeType || 'application/octet-stream',
       fileSize: file.content.length,
@@ -4592,172 +4750,35 @@ async function handleApi(req, res, requestUrl) {
     return true;
   }
 
-  // OAuth (SSO) sign-in — Google and Microsoft Entra ID. On a successful
-  // Authorization Code exchange the callback establishes the HttpOnly session
-  // cookie server-side (establishSsoSession) and 302s to the dashboard — the auth
-  // token is never placed in the URL. The provider rides in the path on
-  // start/callback.
-  //   GET  /api/auth/providers          → { google, microsoft } : which buttons
+  // OAuth (SSO) sign-in — Keycloak only. On a successful Authorization Code
+  // exchange the callback establishes the HttpOnly session cookie server-side
+  // (establishSsoSession) and 302s to the dashboard — the auth token is never
+  // placed in the URL. The provider rides in the path on start/callback (kept
+  // as a path segment rather than hardcoding "keycloak" so a provider can be
+  // added back without reshaping these routes).
+  //   GET  /api/auth/providers          → { keycloak }          : which buttons
   //   GET  /api/auth/:provider/config   → { enabled }           : single provider
   //   GET  /api/auth/:provider/start    → 302 to the provider's consent screen
   //   GET  /api/auth/:provider/callback → exchange code, set session cookie, 302 to /
   if (requestUrl.pathname === '/api/auth/providers' && req.method === 'GET') {
-    const [google, microsoft, adfs, saml] = await Promise.all([
-      getOAuthConfig('google'),
-      getOAuthConfig('microsoft'),
-      getOAuthConfig('adfs'),
-      getSamlConfig(),
-    ]);
+    const keycloak = await getOAuthConfig('keycloak');
     sendJson(res, 200, {
-      google: isOAuthConfigured(google),
-      microsoft: isOAuthConfigured(microsoft),
-      adfs: isOAuthConfigured(adfs),
-      saml: isSamlConfigured(saml),
-      googleLabel: google?.displayName || '',
-      microsoftLabel: microsoft?.displayName || '',
-      adfsLabel: adfs?.displayName || '',
-      samlLabel: saml?.displayName || '',
+      keycloak: isOAuthConfigured(keycloak),
+      keycloakLabel: keycloak?.displayName || '',
     });
     return true;
   }
 
-  // SAML 2.0 SSO endpoints (the dashboard is the SP).
-  //   GET  /api/auth/saml/metadata → SP metadata XML (public, for IdP setup)
-  //   GET  /api/auth/saml/start    → 302 to the IdP carrying a deflate AuthnRequest
-  //   POST /api/auth/saml/acs      → consume the IdP's signed SAMLResponse (POST binding)
-  if (requestUrl.pathname === '/api/auth/saml/metadata' && req.method === 'GET') {
-    const config = await getSamlConfig();
-    const { spEntityId, acsUrl } = await resolveSamlEndpoints(config, req);
-    const xml = buildSpMetadata({ spEntityId, acsUrl });
-    res.statusCode = 200;
-    res.setHeader('Content-Type', 'application/samlmetadata+xml; charset=utf-8');
-    res.setHeader('Content-Disposition', 'inline; filename="sp-metadata.xml"');
-    res.setHeader('Cache-Control', 'no-store');
-    res.end(xml);
-    return true;
-  }
-
-  // Friendly deep-link alias for the SSO portal. Put a "Print Farm" button on the
-  // IdP portal page pointing at https://<this-host>/launch; clicking it kicks off
-  // the SP-initiated SAML login (→ IdP → ACS) and lands the signed-in user on the
-  // dashboard. It is a thin 302 to the canonical SAML start so there is a single
-  // source of truth for the flow.
+  // Friendly deep-link alias for the SSO portal. Put a "Print Farm" button on
+  // an IdP portal page pointing at https://<this-host>/launch; clicking it
+  // kicks off sign-in and lands on the dashboard.
   if (requestUrl.pathname === '/launch' && req.method === 'GET') {
-    sendRedirect(res, '/api/auth/saml/start');
-    return true;
-  }
-
-  if (requestUrl.pathname === '/api/auth/saml/start' && req.method === 'GET') {
-    const config = await getSamlConfig();
-    if (!isSamlConfigured(config)) {
-      sendRedirect(res, '/login?oauth_error=not_configured');
-      return true;
-    }
-    const { spEntityId, acsUrl } = await resolveSamlEndpoints(config, req);
-    const secret = await getOAuthSigningSecret();
-    // Build the request first so its id can be bound into the signed RelayState;
-    // the ACS then enforces InResponseTo against it (CSRF / unsolicited-response
-    // protection on top of the assertion signature).
-    const { url, requestId } = buildAuthnRequest({
-      spEntityId,
-      acsUrl,
-      idpSsoUrl: config.idpSsoUrl,
-      relayState: '',
-    });
-    const relayState = signState(secret, { n: requestId, p: 'saml' });
-    const redirectUrl = new URL(url);
-    redirectUrl.searchParams.set('RelayState', relayState);
-    sendRedirect(res, redirectUrl.toString());
-    return true;
-  }
-
-  if (requestUrl.pathname === '/api/auth/saml/acs' && req.method === 'POST') {
-    const config = await getSamlConfig();
-    if (!isSamlConfigured(config)) {
-      sendRedirect(res, '/login?oauth_error=not_configured');
-      return true;
-    }
-    const { spEntityId, acsUrl } = await resolveSamlEndpoints(config, req);
-    const secret = await getOAuthSigningSecret();
-
-    // The IdP POSTs an auto-submit form (application/x-www-form-urlencoded).
-    let form;
-    try {
-      const body = await readBody(req);
-      form = new URLSearchParams(body.toString('utf8'));
-    } catch {
-      sendRedirect(res, '/login?oauth_error=denied');
-      return true;
-    }
-    const samlResponseB64 = form.get('SAMLResponse') || '';
-    const relayState = form.get('RelayState') || '';
-    // RelayState is our own signed token; recover the AuthnRequest id we issued.
-    const relayData = verifyState(secret, relayState);
-    const expectedInResponseTo = relayData && relayData.p === 'saml' ? relayData.n : null;
-
-    let identity;
-    try {
-      identity = parseAndVerifySamlResponse({
-        samlResponseB64,
-        idpCertificate: config.idpCertificate,
-        spEntityId,
-        acsUrl,
-        expectedInResponseTo,
-      });
-    } catch (error) {
-      if (!(error instanceof SamlError)) {
-        throw error;
-      }
-      sendRedirect(res, '/login?oauth_error=saml_invalid');
-      return true;
-    }
-
-    // Auto-provision gate. When off, only users already in the staff list may
-    // sign in, and they keep their assigned role (the assertion can't escalate);
-    // a known account always keeps its stored role regardless. When on, an
-    // unknown user is admitted with the (validated) role the assertion carries.
-    const staffUsers = await readStaffUsers();
-    const existing = staffUsers.find(
-      (account) =>
-        typeof account.username === 'string' &&
-        account.username.toLowerCase() === identity.email.toLowerCase(),
-    );
-    if (!existing && !config.autoProvisionUsers) {
-      sendRedirect(res, '/login?oauth_error=saml_not_provisioned');
-      return true;
-    }
-    const role = existing && USER_ROLES.has(existing.role)
-      ? existing.role
-      : normalizeSamlRole(identity.role);
-
-    await establishSsoSession(req, res, {
-      provider: 'saml',
-      sub: identity.email,
-      email: identity.email,
-      name: identity.name || identity.email,
-      role,
-    });
-    return true;
-  }
-
-  // ADFS callback lands on the fixed registered path /api/auth/oauth2_redirect.
-  // response_mode=form_post → ADFS POSTs code+state in the body; fall back to
-  // GET query params for any non-form_post configuration.
-  if (requestUrl.pathname === '/api/auth/oauth2_redirect' &&
-      (req.method === 'GET' || req.method === 'POST')) {
-    let callbackUrl = requestUrl;
-    if (req.method === 'POST') {
-      const body = await readBody(req);
-      const params = new URLSearchParams(body);
-      callbackUrl = new URL(requestUrl.toString());
-      for (const [k, v] of params) callbackUrl.searchParams.set(k, v);
-    }
-    await oauthExchangeCallback(req, res, callbackUrl, 'adfs');
+    sendRedirect(res, '/api/auth/keycloak/start');
     return true;
   }
 
   const ssoMatch = requestUrl.pathname.match(
-    /^\/api\/auth\/(google|microsoft|adfs)\/(config|start|callback)$/,
+    /^\/api\/auth\/(keycloak)\/(config|start|callback)$/,
   );
   if (ssoMatch && req.method === 'GET') {
     const providerName = ssoMatch[1];
@@ -4785,29 +4806,14 @@ async function handleApi(req, res, requestUrl) {
       authorizeUrl.searchParams.set('response_type', 'code');
       authorizeUrl.searchParams.set('scope', OAUTH_SCOPE);
       authorizeUrl.searchParams.set('state', state);
-      // ADFS requires a nonce for OpenID Connect flows; without it ADFS loses
-      // session state and redirects to /adfs/ls?error=state instead of our callback.
-      if (providerName === 'adfs' || config.authority) {
-        authorizeUrl.searchParams.set('nonce', nonce);
-      }
-      // form_post: ADFS POSTs code+state from its own HTML page directly to our
-      // redirect_uri — avoids ADFS constructing a GET redirect using its internal
-      // IP instead of the public hostname, which caused /adfs/ls?error=state.
-      if (providerName === 'adfs') {
-        authorizeUrl.searchParams.set('response_mode', 'form_post');
-      }
+      authorizeUrl.searchParams.set('nonce', nonce);
       // Force a fresh login so a shared kiosk doesn't silently reuse a session.
-      // ADFS and on-prem AD FS only understand prompt=login/none/consent —
-      // they reject the Entra/Google `select_account` value with invalid_request.
-      authorizeUrl.searchParams.set(
-        'prompt',
-        config.authority || providerName === 'adfs' ? 'login' : 'select_account',
-      );
+      authorizeUrl.searchParams.set('prompt', 'login');
       sendRedirect(res, authorizeUrl.toString());
       return true;
     }
 
-    // op === 'callback' (google / microsoft only; adfs uses the dedicated route above)
+    // op === 'callback'
     await oauthExchangeCallback(req, res, requestUrl, providerName);
     return true;
   }
@@ -4991,23 +4997,37 @@ async function handleApi(req, res, requestUrl) {
   }
 
   // Admin software-update check. Compares the running image's baked commit SHA
-  // against the latest commit on the configured GitHub branch (cached ~20 min),
-  // so an admin sees "update available" without SSH-ing into the host. Admin-only
-  // (classified in isSensitiveRead); reveals no secrets.
+  // against the newest image PUBLISHED to Docker Hub (cached ~20 min), so an
+  // admin sees "update available" only once there is something they can actually
+  // pull. Admin-only (classified in isSensitiveRead); reveals no secrets.
   if (requestUrl.pathname === '/api/admin/update-status' && req.method === 'GET') {
     const current = runningVersion();
-    if (!UPDATE_CHECK_REPO) {
+    if (!UPDATE_CHECK_IMAGE) {
       sendJson(res, 200, { enabled: false, current }, 'no-store');
       return true;
     }
+    // Surfaced even when the registry check fails, so the card can still show an
+    // in-flight run and offer a rollback after a bad deploy.
+    const [activeRun, pinnedRun, lastGood] = await Promise.all([
+      getActiveUpdateRun().catch(() => null),
+      lastRollbackUpdateRun().catch(() => null),
+      lastSuccessfulUpdateRun().catch(() => null),
+    ]);
+    const canRollback = UPDATE_ROLLBACK_TOKEN.length > 0 && Boolean(UPDATE_CHECK_REPO);
+    // Roll back to whatever we were running before the last successful update.
+    const rollbackTarget = normalizeSha(lastGood?.fromVersion);
     try {
       const force = requestUrl.searchParams.get('force') === '1';
-      const info = await fetchLatestCommit(force);
+      const info = await fetchLatestPublishedVersion(force);
       const latest = info?.latest || null;
-      // Treat a commit as an update only when we know both sides and they differ.
-      // A short SHA baked at build time still matches via prefix comparison.
+      // Treat a published image as an update only when we know both sides and
+      // they differ. `latest` is the 12-char sha-* tag and `current` the full
+      // 40-char baked SHA, so the comparison is prefix-based in both directions.
+      // isVersionComparable() rules out builds with no stamped SHA, which would
+      // otherwise never match and report a permanent phantom update.
       const updateAvailable = Boolean(
-        latest && current && current !== 'dev' && !latest.startsWith(current) && !current.startsWith(latest),
+        latest && current && isVersionComparable()
+        && !latest.startsWith(current) && !current.startsWith(latest),
       );
       sendJson(
         res,
@@ -5020,164 +5040,332 @@ async function handleApi(req, res, requestUrl) {
           latestCommittedAt: info?.latestCommittedAt || null,
           checkedAt: info ? new Date(info.checkedAt).toISOString() : null,
           canApply: WATCHTOWER_TOKEN.length > 0,
+          versionSource: versionSource(),
+          canRollback,
+          rollbackTarget,
+          // Set when the running version is the result of a deliberate rollback,
+          // so the card can say "pinned" instead of nagging to re-apply the very
+          // update that was just reverted.
+          pinnedVersion: pinnedRun?.toVersion || null,
+          activeRunId: activeRun?.id || null,
         },
         'no-store',
       );
     } catch (err) {
-      sendJson(res, 200, { enabled: true, current, error: 'update check failed' }, 'no-store');
+      sendJson(res, 200, {
+        enabled: true,
+        current,
+        error: 'update check failed',
+        canApply: WATCHTOWER_TOKEN.length > 0,
+        versionSource: versionSource(),
+        canRollback,
+        rollbackTarget,
+        activeRunId: activeRun?.id || null,
+      }, 'no-store');
     }
     return true;
   }
 
-  // One-click apply: trigger the Watchtower sidecar to pull the newer :latest
-  // images and recreate the app containers. Admin-only (isAdminMutation) and
-  // audited. Watchtower's HTTP API blocks the request until the pull+recreate
-  // cycle finishes, which can take well over a minute — and it will recreate
-  // this very `web` container mid-flight, killing this request outright. So
-  // this handler is decoupled from both the client connection (closing the
-  // browser tab has no effect — nothing here listens for the request socket
-  // to close) and from waiting out Watchtower's full run: the guard timeout is
-  // generous (5 min, just a backstop against a truly hung updater) and, unlike
-  // a genuine connect failure, timing it out is treated as "started" rather
-  // than an error, since the trigger had already reached Watchtower.
+  // Pre-flight checks, no side effects. The UI calls this to render the
+  // checklist before the admin commits to anything.
+  if (requestUrl.pathname === '/api/admin/update/preflight' && req.method === 'GET') {
+    const preflight = await collectUpdatePreflight(
+      requestUrl.searchParams.get('kind') === 'rollback' ? 'rollback' : 'update',
+    );
+    sendJson(res, 200, preflight, 'no-store');
+    return true;
+  }
+
+  // Update-run history. The durable replacement for the old client-side progress
+  // log, which lived in React state and was lost the moment the tab closed —
+  // while the UI told the admin it was safe to close it.
+  if (requestUrl.pathname === '/api/admin/update/runs' && req.method === 'GET') {
+    const runs = await listUpdateRuns(requestUrl.searchParams.get('limit') || 20);
+    sendJson(res, 200, { runs }, 'no-store');
+    return true;
+  }
+
+  // The in-flight run, if any. Polled by the card on mount — which is what makes
+  // progress survive a tab close, a navigation, or a different admin looking.
+  if (requestUrl.pathname === '/api/admin/update/runs/active' && req.method === 'GET') {
+    const run = await getActiveUpdateRun();
+    const events = run ? await listUpdateRunEvents(run.id) : [];
+    sendJson(res, 200, { run, events }, 'no-store');
+    return true;
+  }
+
+  // One run plus its event log.
+  if (/^\/api\/admin\/update\/runs\/\d+$/.test(requestUrl.pathname) && req.method === 'GET') {
+    const runId = requestUrl.pathname.split('/').pop();
+    const run = await getUpdateRun(runId);
+    if (!run) {
+      sendJson(res, 404, { error: 'Update run not found' });
+      return true;
+    }
+    sendJson(res, 200, { run, events: await listUpdateRunEvents(run.id) }, 'no-store');
+    return true;
+  }
+
+  // Abandon a wedged run so the admin isn't locked out by the concurrency guard.
+  // This does NOT stop Watchtower — nothing can, once triggered; it only releases
+  // this app's record of the run. The UI says so explicitly.
+  if (/^\/api\/admin\/update\/runs\/\d+\/cancel$/.test(requestUrl.pathname) && req.method === 'POST') {
+    const runId = requestUrl.pathname.split('/')[5];
+    const run = await getUpdateRun(runId);
+    if (!run) {
+      sendJson(res, 404, { error: 'Update run not found' });
+      return true;
+    }
+    if (!run.active) {
+      sendJson(res, 409, { error: 'That update run has already finished' });
+      return true;
+    }
+    const session = await resolveSession(req);
+    await appendUpdateRunEvent(run.id, `Cancelled by ${session?.username || 'an admin'}.`, 'warn');
+    const cancelled = await transitionUpdateRun(run.id, run.state, 'cancelled', {
+      error: 'Cancelled by an administrator',
+    });
+    await recordAuditLog({
+      actorName: session ? session.name : null,
+      actorUsername: session ? session.username : null,
+      actorRole: session ? session.role : null,
+      action: 'software.update.cancel',
+      target: String(run.id),
+      details: { state: run.state },
+      source: 'web',
+      ip: getClientIp(req),
+    });
+    sendJson(res, 200, { run: cancelled || run });
+    return true;
+  }
+
+  // One-click apply. Unlike the previous fire-and-forget version, this creates a
+  // durable run row first and returns immediately; the watchdog worker below
+  // drives the rest and survives this container being recreated mid-update.
   if (requestUrl.pathname === '/api/admin/update/apply' && req.method === 'POST') {
     if (!WATCHTOWER_TOKEN) {
       sendJson(res, 503, { error: 'One-click update is not configured on this host' });
       return true;
     }
+    const preflight = await collectUpdatePreflight('update');
+    if (!preflight.ok) {
+      // Blocking checks are hard failures with no override — see the severity
+      // contract in server/updatePreflight.js.
+      sendJson(res, 409, { error: 'Pre-flight checks failed', checks: preflight.checks });
+      return true;
+    }
     const session = await resolveSession(req);
+    const latest = updateCheckCache?.latest || null;
+    let run;
+    try {
+      run = await createUpdateRun({
+        kind: 'update',
+        fromVersion: runningVersion(),
+        toVersion: latest,
+        targetTag: 'latest',
+        actorName: session?.name || null,
+        actorUsername: session?.username || null,
+        actorRole: session?.role || null,
+        preflight: { checks: preflight.checks },
+        deadlineMs: UPDATE_RUN_DEADLINE_MS,
+      });
+    } catch (error) {
+      if (error?.conflict) {
+        const active = await getActiveUpdateRun();
+        sendJson(res, 409, { error: 'An update is already running', runId: active?.id || null });
+        return true;
+      }
+      throw error;
+    }
     await recordAuditLog({
       actorName: session ? session.name : null,
       actorUsername: session ? session.username : null,
       actorRole: session ? session.role : null,
       action: 'software.update.apply',
       target: UPDATE_CHECK_REPO || null,
-      details: { current: runningVersion(), latest: updateCheckCache?.latest || null },
+      details: { current: runningVersion(), latest, runId: run.id },
       source: 'web',
       ip: getClientIp(req),
     });
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 5 * 60 * 1000);
+    await appendUpdateRunEvent(run.id, 'Update requested. Pre-flight checks passed.');
+    // Fire-and-forget: the worker owns the run from here, so the browser gets an
+    // immediate runId instead of holding a request open across its own restart.
+    void startWatchtowerUpdate(run);
+    sendJson(res, 202, { started: true, runId: run.id });
+    return true;
+  }
+
+  // Roll back to a previously published commit. Dispatches the CI workflow that
+  // re-points the :latest tags, then triggers Watchtower exactly like a forward
+  // update — see server/updateRollback.js for why the registry write is not done
+  // from this container.
+  if (requestUrl.pathname === '/api/admin/update/rollback' && req.method === 'POST') {
+    if (!UPDATE_ROLLBACK_TOKEN || !UPDATE_CHECK_REPO) {
+      sendJson(res, 503, { error: 'Rollback is not configured on this host' });
+      return true;
+    }
+    if (!WATCHTOWER_TOKEN) {
+      sendJson(res, 503, { error: 'One-click update is not configured on this host' });
+      return true;
+    }
+    const body = await readJsonBody(req);
+    const targetVersion = normalizeSha(body?.targetVersion);
+    if (!targetVersion) {
+      sendJson(res, 400, { error: 'A valid target commit is required' });
+      return true;
+    }
+    const preflight = await collectUpdatePreflight('rollback');
+    if (!preflight.ok) {
+      sendJson(res, 409, { error: 'Pre-flight checks failed', checks: preflight.checks });
+      return true;
+    }
+    const session = await resolveSession(req);
+    let run;
     try {
-      const resp = await fetch(WATCHTOWER_URL, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${WATCHTOWER_TOKEN}` },
-        signal: controller.signal,
+      run = await createUpdateRun({
+        kind: 'rollback',
+        fromVersion: runningVersion(),
+        toVersion: targetVersion,
+        targetTag: `sha-${targetVersion.slice(0, 12)}`,
+        actorName: session?.name || null,
+        actorUsername: session?.username || null,
+        actorRole: session?.role || null,
+        preflight: { checks: preflight.checks },
+        deadlineMs: UPDATE_RUN_DEADLINE_MS,
       });
-      if (!resp.ok) {
-        sendJson(res, 502, { error: `Updater responded ${resp.status}` });
+    } catch (error) {
+      if (error?.conflict) {
+        const active = await getActiveUpdateRun();
+        sendJson(res, 409, { error: 'An update is already running', runId: active?.id || null });
         return true;
       }
-      sendJson(res, 202, { started: true });
-    } catch (err) {
-      if (err?.name === 'AbortError') {
-        // Our own backstop fired, not a connect failure — the trigger reached
-        // Watchtower and the update is very likely underway.
-        sendJson(res, 202, { started: true });
-      } else {
-        sendJson(res, 502, { error: 'Could not reach the updater service' });
-      }
-    } finally {
-      clearTimeout(timer);
+      throw error;
     }
+    await recordAuditLog({
+      actorName: session ? session.name : null,
+      actorUsername: session ? session.username : null,
+      actorRole: session ? session.role : null,
+      action: 'software.update.rollback',
+      target: UPDATE_CHECK_REPO || null,
+      details: { current: runningVersion(), targetVersion, runId: run.id },
+      source: 'web',
+      ip: getClientIp(req),
+    });
+    await appendUpdateRunEvent(run.id, `Rollback to ${targetVersion.slice(0, 7)} requested.`);
+    void startRollback(run, targetVersion);
+    sendJson(res, 202, { started: true, runId: run.id });
     return true;
   }
 
   // Full-data backup. Every table the app considers "data" (printers,
   // filament inventory, queue jobs + their stored model files, app_settings —
   // branding/automation/SSO/staff users/admin credential all live there —
-  // API keys, audit logs, maintenance, network usage) is serialized to one
-  // JSON file per table plus a manifest.json, zipped in memory (buildZip
-  // needs the whole archive assembled to know the central-directory offsets)
-  // and streamed back as a download. Admin-only (isSensitiveRead); this is
-  // deliberately not redacted like the public printer list, since it's the
-  // whole point of a backup.
+  // API keys, audit logs, maintenance, network usage) is written straight into
+  // the response as a compressed ZIP: rows as newline-delimited JSON, each
+  // stored model file as its own entry streamed out of Postgres in slices.
+  // Nothing is buffered — the archive can be far larger than the container's
+  // memory, which the previous build-it-all-in-RAM version could not survive.
+  // `?includeFiles=0` skips the model-file bytes for a small settings-and-
+  // metadata-only backup. Admin-only (isSensitiveRead); deliberately not
+  // redacted like the public printer list, since that's the point of a backup.
   if (requestUrl.pathname === '/api/admin/backup/download' && req.method === 'GET') {
-    const { manifest, tables } = await buildBackupSnapshot();
-    const entries = [{ name: 'manifest.json', data: Buffer.from(JSON.stringify(manifest)) }];
-    for (const [name, rows] of Object.entries(tables)) {
-      entries.push({ name: `tables/${name}.json`, data: Buffer.from(JSON.stringify(rows)) });
-    }
-    const zip = createZip(entries);
-    const timestamp = manifest.generatedAt.replace(/[:.]/g, '-');
+    const includeFilesParam = requestUrl.searchParams.get('includeFiles');
+    const includeFiles = !(includeFilesParam === '0' || includeFilesParam === 'false');
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const source = await createBackupSource({ includeFiles });
+
     res.statusCode = 200;
     res.setHeader('Content-Type', 'application/zip');
-    res.setHeader('Content-Length', zip.length);
+    // No Content-Length: the size isn't known until the last byte is written.
     res.setHeader('Content-Disposition', `attachment; filename="printfarm-backup-${timestamp}.zip"`);
     res.setHeader('Cache-Control', 'no-store');
-    res.end(zip);
-    return true;
-  }
 
-  // Restore from a backup archive produced by the endpoint above. Destructive:
-  // TRUNCATEs and replaces every table named in the archive inside one
-  // transaction (restoreBackupSnapshot). Admin-only (isAdminMutation) and
-  // audited. The upload is the raw zip bytes as the request body (not
-  // multipart) — simpler for a single-file upload, matching the
-  // /api/v1/queue/:id/file PUT pattern.
-  if (requestUrl.pathname === '/api/admin/backup/restore' && req.method === 'POST') {
-    let archive;
+    let failed = null;
     try {
-      archive = await readBodyBounded(req, BACKUP_UPLOAD_MAX_BYTES);
-    } catch {
-      const limitMb = Math.round(BACKUP_UPLOAD_MAX_BYTES / (1024 * 1024));
-      sendJson(res, 413, { error: `Backup archive exceeds the ${limitMb} MB upload limit.` });
-      return true;
-    }
-
-    let entries;
-    try {
-      entries = readZip(archive);
-    } catch (error) {
-      sendJson(res, 400, { error: `Not a valid backup archive: ${error.message}` });
-      return true;
-    }
-
-    const rawTables = {};
-    let manifest = null;
-    for (const entry of entries) {
-      try {
-        if (entry.name === 'manifest.json') {
-          manifest = JSON.parse(entry.data.toString('utf8'));
-        } else if (entry.name.startsWith('tables/') && entry.name.endsWith('.json')) {
-          const tableName = entry.name.slice('tables/'.length, -'.json'.length);
-          rawTables[tableName] = JSON.parse(entry.data.toString('utf8'));
-        }
-      } catch (error) {
-        sendJson(res, 400, { error: `Corrupt backup archive entry "${entry.name}": ${error.message}` });
-        return true;
+      const zip = new ZipStreamWriter(res);
+      for await (const entry of source.entries()) {
+        await zip.addEntry(entry.name, entry.source, {
+          expectedSize: entry.expectedSize ?? null,
+          ...(entry.level === undefined ? {} : { level: entry.level }),
+        });
       }
-    }
-    if (!manifest || Object.keys(rawTables).length === 0) {
-      sendJson(res, 400, { error: 'Backup archive is missing manifest.json or table data.' });
-      return true;
-    }
-
-    const session = await resolveSession(req);
-    try {
-      const tables = reviveBackupTables(rawTables);
-      await restoreBackupSnapshot(tables);
+      await zip.finish();
     } catch (error) {
-      logger.error('backup restore failed', { err: error instanceof Error ? error.message : error });
-      sendJson(res, 500, { error: 'Restore failed; no changes were committed.' });
+      failed = error;
+    } finally {
+      await source.close();
+    }
+
+    if (failed) {
+      // Headers are already out, so the only honest signal left is an aborted
+      // response — a truncated file the browser reports as a failed download.
+      logger.error('backup download failed', {
+        err: failed instanceof Error ? failed.message : failed,
+      });
+      res.destroy();
       return true;
     }
 
-    const restoredTables = Object.entries(rawTables).map(([name, rows]) => ({
-      name,
-      rowCount: Array.isArray(rows) ? rows.length : 0,
-    }));
+    res.end();
+    const summary = source.summary();
+    // Audited so the `backup-fresh` update pre-flight can see that a backup
+    // was actually taken (not just restored).
+    const session = await resolveSession(req);
     await recordAuditLog({
       actorName: session ? session.name : null,
       actorUsername: session ? session.username : null,
       actorRole: session ? session.role : null,
-      action: 'backup.restore',
+      action: 'backup.download',
       target: null,
-      details: { sourceGeneratedAt: manifest.generatedAt || null, tables: restoredTables },
+      details: { includeFiles, tables: summary.tables, blobs: summary.blobs },
       source: 'web',
       ip: getClientIp(req),
     });
-    sendJson(res, 200, { ok: true, tables: restoredTables });
+    return true;
+  }
+
+  // Restore from a backup archive produced by the download endpoint above (or
+  // by an older version — v1 archives, one JSON array per table with inlined
+  // base64 file bytes, still restore). Destructive: TRUNCATEs and replaces
+  // every table named in the archive inside one transaction. The upload is the
+  // raw zip bytes as the request body (not multipart) — simpler for a
+  // single-file upload, matching the /api/v1/queue/:id/file PUT pattern — and
+  // is spooled to a temp file rather than buffered, so the archive size is
+  // bounded by disk, not by RAM.
+  if (requestUrl.pathname === '/api/admin/backup/restore' && req.method === 'POST') {
+    const session = await resolveSession(req);
+    try {
+      const restoredTables = await restoreBackupUpload(req, session);
+      sendJson(res, 200, { ok: true, tables: restoredTables });
+    } catch (error) {
+      sendJson(res, error.status || 500, { error: error.message || 'Restore failed; no changes were committed.' });
+    }
+    return true;
+  }
+
+  // Pre-auth counterpart to the route above, reachable only while no admin
+  // password has been set yet (same one-shot trust model as the POST
+  // /api/admin/credential first-run carve-out below: whoever reaches the
+  // fresh instance first can complete setup, here by restoring a prior
+  // instance's data instead of choosing a new password). Restoring a backup
+  // also restores `app_settings` — where the admin password hash lives — so
+  // this re-establishes the *original* admin credential; the caller logs in
+  // afterward rather than being auto-signed-in, since the server never learns
+  // the plaintext password. Permanently 409s once an admin password exists,
+  // matching /api/admin/credential's POST.
+  if (requestUrl.pathname === '/api/admin/backup/restore-first-run' && req.method === 'POST') {
+    const stored = await getAppSetting(ADMIN_CREDENTIAL_KEY);
+    const storedHash = stored && typeof stored.passwordHash === 'string' ? stored.passwordHash : '';
+    if (storedHash.length > 0) {
+      sendJson(res, 409, { error: 'Admin password is already configured' });
+      return true;
+    }
+    try {
+      const restoredTables = await restoreBackupUpload(req, null);
+      sendJson(res, 200, { ok: true, tables: restoredTables });
+    } catch (error) {
+      sendJson(res, error.status || 500, { error: error.message || 'Restore failed; no changes were committed.' });
+    }
     return true;
   }
 
@@ -5904,14 +6092,12 @@ async function handleApi(req, res, requestUrl) {
     }
   }
 
-  // OAuth (SSO) sign-in config, per provider (admin-only in the UI, like the
-  // integrations form above). GET never returns the client secret — only whether
-  // one is stored; PUT with a blank/omitted clientSecret keeps the existing one so
-  // the form can round-trip without re-entering it. `tenant` is Microsoft-only
-  // (the Azure directory / tenant id); it is accepted and stored for any provider
-  // but ignored where unused.
+  // OAuth (SSO) sign-in config — Keycloak only (admin-only in the UI, like the
+  // integrations form above). GET never returns the client secret — only
+  // whether one is stored; PUT with a blank/omitted clientSecret keeps the
+  // existing one so the form can round-trip without re-entering it.
   const oauthSettingsMatch = requestUrl.pathname.match(
-    /^\/api\/settings\/oauth\/(google|microsoft|adfs)$/,
+    /^\/api\/settings\/oauth\/(keycloak)$/,
   );
   if (oauthSettingsMatch) {
     const providerName = oauthSettingsMatch[1];
@@ -5921,8 +6107,8 @@ async function handleApi(req, res, requestUrl) {
       sendJson(res, 200, {
         enabled: config.enabled,
         clientId: config.clientId,
-        tenant: config.tenant,
         authority: config.authority,
+        realm: config.realm,
         allowedDomains: config.allowedDomains,
         hasClientSecret: config.clientSecret.length > 0,
         displayName: config.displayName,
@@ -5934,8 +6120,8 @@ async function handleApi(req, res, requestUrl) {
       const body = await readJsonBody(req);
       const enabled = body?.enabled === true;
       const clientId = typeof body?.clientId === 'string' ? body.clientId.trim() : '';
-      const tenant = typeof body?.tenant === 'string' ? body.tenant.trim() : '';
       const authority = typeof body?.authority === 'string' ? body.authority.trim() : '';
+      const realm = typeof body?.realm === 'string' ? body.realm.trim() : '';
       const displayName = typeof body?.displayName === 'string' ? body.displayName.trim() : '';
       const redirectUri = typeof body?.redirectUri === 'string' ? body.redirectUri.trim() : '';
       const authorizeEndpoint = typeof body?.authorizeEndpoint === 'string' ? body.authorizeEndpoint.trim() : '';
@@ -5943,7 +6129,6 @@ async function handleApi(req, res, requestUrl) {
       const logoutEndpoint = typeof body?.logoutEndpoint === 'string' ? body.logoutEndpoint.trim() : '';
       const metadataUrl = typeof body?.metadataUrl === 'string' ? body.metadataUrl.trim() : '';
       const jwksUri = typeof body?.jwksUri === 'string' ? body.jwksUri.trim() : '';
-      const relyingPartyId = typeof body?.relyingPartyId === 'string' ? body.relyingPartyId.trim() : '';
       const allowedDomains = Array.isArray(body?.allowedDomains)
         ? body.allowedDomains
             .map((domain) => String(domain || '').trim().toLowerCase().replace(/^@/, ''))
@@ -5960,8 +6145,8 @@ async function handleApi(req, res, requestUrl) {
         enabled,
         clientId,
         clientSecret,
-        tenant,
         authority,
+        realm,
         displayName,
         redirectUri,
         authorizeEndpoint,
@@ -5969,18 +6154,14 @@ async function handleApi(req, res, requestUrl) {
         logoutEndpoint,
         metadataUrl,
         jwksUri,
-        relyingPartyId,
         allowedDomains,
       });
-      // SSO providers are independent: Google, Microsoft/AD FS, and SAML can each
-      // be enabled at the same time, and the login page renders one button per
-      // enabled provider. Enabling one no longer disables the others.
       const saved = await getOAuthConfig(providerName);
       sendJson(res, 200, {
         enabled: saved.enabled,
         clientId: saved.clientId,
-        tenant: saved.tenant,
         authority: saved.authority,
+        realm: saved.realm,
         allowedDomains: saved.allowedDomains,
         hasClientSecret: saved.clientSecret.length > 0,
         displayName: saved.displayName,
@@ -5990,165 +6171,9 @@ async function handleApi(req, res, requestUrl) {
         logoutEndpoint: saved.logoutEndpoint,
         metadataUrl: saved.metadataUrl,
         jwksUri: saved.jwksUri,
-        relyingPartyId: saved.relyingPartyId,
       });
       return true;
     }
-  }
-
-  // SAML 2.0 SSO configuration (Settings → SSO Configuration). GET returns the
-  // saved config (the certificate is a public signing cert, so it is returned in
-  // full so the form can round-trip). PUT validates URLs and the cert before
-  // persisting, stamps updatedAt, and — when enabling SAML — disables any OAuth
-  // provider so only one SSO mechanism is active at a time. Admin-only is enforced
-  // in the UI (the cookieless frontend /api/* surface, like the OAuth settings
-  // routes, has no server-side session to gate on; the key-gated /api/v1 surface
-  // is the authenticated path).
-  if (requestUrl.pathname === '/api/settings/saml') {
-    if (req.method === 'GET') {
-      const config = await getSamlConfig();
-      const { spEntityId, acsUrl } = await resolveSamlEndpoints(config, req);
-      sendJson(res, 200, {
-        ...config,
-        // Surface the effective SP identifiers so the form can prefill the
-        // defaults the metadata endpoint advertises when the fields are blank.
-        defaultSpEntityId: await defaultSamlSpEntityId(req),
-        defaultAcsUrl: await defaultSamlAcsUrl(req),
-        effectiveSpEntityId: spEntityId,
-        effectiveAcsUrl: acsUrl,
-      });
-      return true;
-    }
-    if (req.method === 'PUT') {
-      const body = await readJsonBody(req);
-      const enabled = body?.enabled === true;
-      const idpEntityId = typeof body?.idpEntityId === 'string' ? body.idpEntityId.trim() : '';
-      const idpSsoUrl = typeof body?.idpSsoUrl === 'string' ? body.idpSsoUrl.trim() : '';
-      const idpCertificate =
-        typeof body?.idpCertificate === 'string' ? body.idpCertificate.trim() : '';
-      const spEntityId = typeof body?.spEntityId === 'string' ? body.spEntityId.trim() : '';
-      const acsUrl = typeof body?.acsUrl === 'string' ? body.acsUrl.trim() : '';
-      const autoProvisionUsers = body?.autoProvisionUsers === true;
-      const displayName = typeof body?.displayName === 'string' ? body.displayName.trim() : '';
-
-      // URL + certificate validation. URLs, when provided, must be absolute
-      // http(s); the IdP SSO URL and certificate are required to enable the flow.
-      for (const [label, value] of [
-        ['IdP SSO URL', idpSsoUrl],
-        ['SP entity ID', spEntityId],
-        ['ACS URL', acsUrl],
-      ]) {
-        if (value && !isValidHttpUrl(value)) {
-          sendJson(res, 400, { error: `${label} must be a valid http(s) URL` });
-          return true;
-        }
-      }
-      if (idpCertificate && !isValidCertificate(idpCertificate)) {
-        sendJson(res, 400, { error: 'IdP certificate is not a valid X.509 PEM certificate' });
-        return true;
-      }
-      if (enabled && (!idpSsoUrl || !idpCertificate)) {
-        sendJson(res, 400, {
-          error: 'An IdP SSO URL and certificate are required to enable SAML SSO',
-        });
-        return true;
-      }
-
-      await setAppSetting(SAML_SETTINGS_KEY, {
-        enabled,
-        idpEntityId,
-        idpSsoUrl,
-        idpCertificate,
-        spEntityId,
-        acsUrl,
-        autoProvisionUsers,
-        displayName,
-        updatedAt: new Date().toISOString(),
-      });
-      // SSO providers are independent: SAML can be enabled alongside the OAuth
-      // providers (Google, Microsoft/AD FS). Enabling SAML no longer disables them.
-      await recordAuditLog({
-        action: 'settings.saml.update',
-        target: 'saml_sso',
-        details: { enabled, autoProvisionUsers },
-        source: 'web',
-        ip: getClientIp(req),
-      });
-      const saved = await getSamlConfig();
-      const endpoints = await resolveSamlEndpoints(saved, req);
-      sendJson(res, 200, {
-        ...saved,
-        defaultSpEntityId: await defaultSamlSpEntityId(req),
-        defaultAcsUrl: await defaultSamlAcsUrl(req),
-        effectiveSpEntityId: endpoints.spEntityId,
-        effectiveAcsUrl: endpoints.acsUrl,
-      });
-      return true;
-    }
-  }
-
-  // Test the SAML configuration without committing it: validates the submitted
-  // (or stored) values and probes the IdP SSO URL for reachability. Returns a
-  // list of checks the UI renders, plus an overall ok flag.
-  if (requestUrl.pathname === '/api/settings/saml/test' && req.method === 'POST') {
-    const stored = await getSamlConfig();
-    const body = await readJsonBody(req).catch(() => ({}));
-    const idpSsoUrl =
-      typeof body?.idpSsoUrl === 'string' && body.idpSsoUrl.trim()
-        ? body.idpSsoUrl.trim()
-        : stored.idpSsoUrl;
-    const idpCertificate =
-      typeof body?.idpCertificate === 'string' && body.idpCertificate.trim()
-        ? body.idpCertificate.trim()
-        : stored.idpCertificate;
-
-    const checks = [];
-    const urlOk = isValidHttpUrl(idpSsoUrl);
-    checks.push({
-      label: 'IdP SSO URL is a valid http(s) URL',
-      ok: urlOk,
-    });
-    checks.push({
-      label: 'IdP certificate is a valid X.509 certificate',
-      ok: isValidCertificate(idpCertificate),
-    });
-
-    if (urlOk) {
-      // Probe the IdP endpoint. Many IdP SSO endpoints reject a bare GET (they
-      // expect a SAMLRequest), so any HTTP response — even 4xx — proves it is
-      // reachable; only a network/timeout failure counts as unreachable.
-      let reachable = false;
-      let detail = '';
-      try {
-        // H-3: refuse to probe a URL that resolves to a private/reserved address
-        // (loopback, LAN, cloud metadata) so this admin diagnostic can't be used
-        // as an SSRF primitive.
-        await assertPublicHttpTarget(idpSsoUrl);
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 5000);
-        try {
-          const probe = await fetch(idpSsoUrl, {
-            method: 'GET',
-            redirect: 'manual',
-            signal: controller.signal,
-          });
-          reachable = true;
-          detail = `HTTP ${probe.status}`;
-        } finally {
-          clearTimeout(timeout);
-        }
-      } catch (error) {
-        detail = error instanceof Error ? error.message : 'unreachable';
-      }
-      checks.push({
-        label: 'IdP SSO URL is reachable',
-        ok: reachable,
-        detail,
-      });
-    }
-
-    sendJson(res, 200, { ok: checks.every((check) => check.ok), checks });
-    return true;
   }
 
   // Customizable site branding (logo + optional full-page background). GET is
@@ -6658,9 +6683,40 @@ async function handleRequest(req, res) {
     // Prometheus scrape of the web tier's own request metrics. Intentionally
     // internal — nginx returns 404 for /metrics; Prometheus scrapes web:5173
     // directly over the compose network. Carries no secrets.
+    //
+    // In the single-container build there is no nginx to 404 it, and this port
+    // IS the public one, so METRICS_LISTEN_PORT moves the scrape endpoint to its
+    // own listener (see below) and this path becomes a 404 like any other.
+    if (METRICS_LISTEN_PORT) {
+      sendJson(res, 404, { error: 'Not found' });
+      return;
+    }
     res.setHeader('Content-Type', 'text/plain; version=0.0.4; charset=utf-8');
     res.setHeader('Cache-Control', 'no-store');
     res.end(renderMetrics());
+    return;
+  }
+
+  // Single-container build: the slicer proxy and the MCP server run inside this
+  // process instead of as their own containers behind nginx. Path prefixes match
+  // the nginx locations they replace exactly, so slicer/MCP clients see the same
+  // URLs. Each mounted surface keeps its own authentication (the proxy's
+  // X-Api-Key check, MCP's printfarm_manage key on initialize) — nothing here
+  // widens access.
+  if (embeddedSlicerProxy && isSlicerProxyPath(requestUrl.pathname)) {
+    await embeddedSlicerProxy(req, res);
+    return;
+  }
+
+  if (embeddedMcpHandler && isMcpPath(requestUrl.pathname)) {
+    // Fail-closed, mirroring nginx/docker-entrypoint.d/15-mcp-access.sh: the MCP
+    // surface is a full read/write control plane, so it is 403 on the public
+    // port unless MCP_HTTP_PUBLIC=true (it stays key-gated either way).
+    if (!MCP_HTTP_PUBLIC) {
+      sendJson(res, 403, { error: 'Forbidden' });
+      return;
+    }
+    await embeddedMcpHandler(req, res);
     return;
   }
 
@@ -7005,6 +7061,267 @@ function scheduleMaintenanceWorker() {
 scheduleMaintenanceWorker();
 
 // ---------------------------------------------------------------------------
+// Software update run lifecycle
+// ---------------------------------------------------------------------------
+// An update replaces the container running this code, so nothing here may rely
+// on staying alive: the run's state lives in Postgres, every step is a
+// conditional transition, and the watchdog below re-attaches to an in-flight run
+// when the NEW container boots. That is what lets the UI honestly say "safe to
+// close this tab" — the old implementation said it while keeping the only copy
+// of the progress log in browser memory.
+
+// Gathers the inputs the preflight module needs from this module's config.
+async function collectUpdatePreflight(kind = 'update') {
+  const readiness = await checkReadiness().catch(() => ({ checks: {} }));
+  const schemaVersion = await currentSchemaVersion().catch(() => null);
+  return runUpdatePreflight({
+    kind,
+    versionComparable: isVersionComparable(),
+    databaseOk: readiness.checks?.database === 'ok',
+    watchtowerUrl: WATCHTOWER_URL,
+    canApply: WATCHTOWER_TOKEN.length > 0,
+    rollbackConfigured: UPDATE_ROLLBACK_TOKEN.length > 0 && Boolean(UPDATE_CHECK_REPO),
+    schemaVersion,
+  });
+}
+
+// POSTs the trigger to Watchtower and moves the run to 'applying'. Watchtower's
+// HTTP API blocks until its whole pull+recreate cycle finishes and will kill this
+// very container partway through, so an aborted request is expected and is NOT an
+// error — the trigger had already landed. Only a transport failure means the
+// update never started.
+async function triggerWatchtower(run) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 5 * 60 * 1000);
+  try {
+    const resp = await fetch(WATCHTOWER_URL, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${WATCHTOWER_TOKEN}` },
+      signal: controller.signal,
+    });
+    if (!resp.ok) {
+      logger.error('watchtower trigger rejected', { status: resp.status });
+      return { ok: false, error: 'The updater service rejected the request' };
+    }
+    return { ok: true };
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      return { ok: true };
+    }
+    logger.error('watchtower trigger failed', { error: error?.message });
+    return { ok: false, error: 'Could not reach the updater service' };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function startWatchtowerUpdate(run) {
+  const moved = await transitionUpdateRun(run.id, 'queued', 'triggering');
+  if (!moved) return; // another process already owns this run
+  await appendUpdateRunEvent(run.id, 'Asking the updater to pull the new images…');
+  const result = await triggerWatchtower(run);
+  if (!result.ok) {
+    await appendUpdateRunEvent(run.id, result.error, 'error');
+    await transitionUpdateRun(run.id, 'triggering', 'failed', { error: result.error });
+    return;
+  }
+  await appendUpdateRunEvent(run.id, 'Updater accepted the request. Containers will restart shortly.');
+  await transitionUpdateRun(run.id, 'triggering', 'applying');
+}
+
+async function startRollback(run, targetVersion) {
+  const moved = await transitionUpdateRun(run.id, 'queued', 'retagging');
+  if (!moved) return;
+  await appendUpdateRunEvent(run.id, 'Starting the rollback job to republish the older version…');
+  const result = await triggerRollbackWorkflow({
+    repo: UPDATE_CHECK_REPO,
+    branch: UPDATE_CHECK_BRANCH,
+    workflow: UPDATE_ROLLBACK_WORKFLOW,
+    token: UPDATE_ROLLBACK_TOKEN,
+    targetSha: targetVersion,
+  });
+  if (!result.ok) {
+    await appendUpdateRunEvent(run.id, result.error, 'error');
+    await transitionUpdateRun(run.id, 'retagging', 'failed', { error: result.error });
+    return;
+  }
+  // The watchdog polls the workflow from here; stash the dispatch time so a
+  // restart mid-rollback can still correlate the run.
+  await transitionUpdateRun(run.id, 'retagging', 'retagging', {
+    health: { rollbackDispatchedAt: result.dispatchedAt },
+  });
+  await appendUpdateRunEvent(run.id, 'Rollback job queued. Waiting for the older images to be republished…');
+}
+
+// One watchdog pass. Deliberately does the minimum per tick and re-reads state
+// from the database each time, so two overlapping containers can both run it
+// safely (the conditional transitions make the loser a no-op).
+async function runUpdateWatchdogPass() {
+  const run = await getActiveUpdateRun();
+  if (!run) return;
+
+  if (Date.now() > new Date(run.deadlineAt).getTime()) {
+    // Transition first: only the pass that actually wins the state change should
+    // write the log line, or two overlapping containers double-report.
+    const timedOut = await transitionUpdateRun(run.id, run.state, 'timed_out', {
+      error: 'Timed out waiting for the update to finish',
+    });
+    if (timedOut) {
+      await appendUpdateRunEvent(
+        run.id,
+        'Timed out waiting for the update to finish. Check the running version, and roll back if the app is unhealthy.',
+        'error',
+      );
+    }
+    return;
+  }
+
+  // Recovery for a run stranded by this container dying at exactly the wrong
+  // moment. Without these two branches the run would sit untouched until its
+  // deadline — a 15-minute stall for what is usually a recoverable hiccup.
+  if (run.state === 'queued') {
+    // The row was written but the trigger never went out (or we cannot tell).
+    // Re-drive it; the conditional transition inside makes this safe to retry.
+    if (run.kind === 'rollback' && run.toVersion) {
+      await startRollback(run, run.toVersion);
+    } else {
+      await startWatchtowerUpdate(run);
+    }
+    return;
+  }
+
+  if (run.state === 'triggering') {
+    // We were mid-POST to the updater when the process ended. If this process is
+    // a fresh container at all, the recreate it was asking for has happened — so
+    // hand over to the normal arrival check rather than re-triggering a pull.
+    await transitionUpdateRun(run.id, 'triggering', 'applying');
+    return;
+  }
+
+  if (run.state === 'retagging') {
+    const dispatchedAt = Number(run.health?.rollbackDispatchedAt) || Date.now();
+    const poll = await pollRollbackWorkflow({
+      repo: UPDATE_CHECK_REPO,
+      workflow: UPDATE_ROLLBACK_WORKFLOW,
+      token: UPDATE_ROLLBACK_TOKEN,
+      dispatchedAt,
+    });
+    if (poll.status === 'succeeded') {
+      await appendUpdateRunEvent(run.id, 'Older version republished. Asking the updater to pull it…');
+      const moved = await transitionUpdateRun(run.id, 'retagging', 'triggering');
+      if (!moved) return;
+      const result = await triggerWatchtower(run);
+      if (!result.ok) {
+        await appendUpdateRunEvent(run.id, result.error, 'error');
+        await transitionUpdateRun(run.id, 'triggering', 'failed', { error: result.error });
+        return;
+      }
+      await transitionUpdateRun(run.id, 'triggering', 'applying');
+      await appendUpdateRunEvent(run.id, 'Updater accepted the request. Containers will restart shortly.');
+    } else if (poll.status === 'failed') {
+      await appendUpdateRunEvent(run.id, poll.detail || 'The rollback job failed', 'error');
+      await transitionUpdateRun(run.id, 'retagging', 'failed', { error: poll.detail || 'The rollback job failed' });
+    }
+    return;
+  }
+
+  if (run.state === 'applying') {
+    // We are the new container if our own version now matches the target. When
+    // toVersion is unknown (the GitHub check was down at request time), any
+    // change away from fromVersion counts.
+    const current = runningVersion();
+    const target = run.toVersion;
+    const arrived = target
+      ? (current.startsWith(target) || target.startsWith(current))
+      : current !== run.fromVersion;
+    if (arrived) {
+      await appendUpdateRunEvent(run.id, `Now running ${current.slice(0, 7)}. Verifying health…`);
+      await transitionUpdateRun(run.id, 'applying', 'verifying', {
+        toVersion: current,
+        health: { passes: 0, lastCheck: null },
+      });
+    }
+    return;
+  }
+
+  if (run.state === 'verifying') {
+    const health = run.health || {};
+    const lastCheck = Number(health.lastCheck) || 0;
+    // Space the probes out: three checks in the same second would prove nothing
+    // about a container that comes up and then falls over.
+    if (Date.now() - lastCheck < UPDATE_HEALTH_PASS_SPACING_MS) return;
+    const readiness = await checkReadiness().catch(() => ({ ok: false }));
+    if (!readiness.ok) {
+      // Reset rather than fail: a single blip mid-restart is normal. Sustained
+      // failure is caught by the deadline, which is the crash-loop case.
+      await transitionUpdateRun(run.id, 'verifying', 'verifying', {
+        health: { ...health, passes: 0, lastCheck: Date.now() },
+      });
+      return;
+    }
+    const passes = (Number(health.passes) || 0) + 1;
+    if (passes < UPDATE_HEALTH_PASSES) {
+      await transitionUpdateRun(run.id, 'verifying', 'verifying', {
+        health: { ...health, passes, lastCheck: Date.now() },
+      });
+      return;
+    }
+    // Transition first so only the winner logs and audits the completion.
+    const succeeded = await transitionUpdateRun(run.id, 'verifying', 'succeeded', {
+      health: { ...health, passes, lastCheck: Date.now() },
+    });
+    if (!succeeded) return;
+    await appendUpdateRunEvent(
+      run.id,
+      `Update complete — ${runningVersion().slice(0, 7)} is healthy (${passes} consecutive checks).`,
+    );
+    await recordAuditLog({
+      actorName: run.actorName,
+      actorUsername: run.actorUsername,
+      actorRole: run.actorRole,
+      action: run.kind === 'rollback' ? 'software.update.rollback.succeeded' : 'software.update.succeeded',
+      target: UPDATE_CHECK_REPO || null,
+      details: { from: run.fromVersion, to: runningVersion(), runId: run.id },
+      source: 'web',
+      ip: null,
+    });
+  }
+}
+
+const UPDATE_WATCHDOG_INTERVAL_MS = 5000;
+let updateWatchdogRunning = false;
+function scheduleUpdateRunWorker() {
+  setInterval(() => {
+    if (updateWatchdogRunning) return; // never overlap passes
+    updateWatchdogRunning = true;
+    runUpdateWatchdogPass()
+      .catch((error) => logger.error('update watchdog pass failed', error))
+      .finally(() => {
+        updateWatchdogRunning = false;
+      });
+  }, UPDATE_WATCHDOG_INTERVAL_MS).unref();
+}
+// Started at import, which is the whole trick: the container Watchtower just
+// created runs this on boot, finds the in-flight run in Postgres, and finishes
+// verifying it. No separate resume path needed.
+//
+// Known floor: if the new web container never starts at all, nobody runs this
+// and the run only resolves once some web comes back (or the deadline passes on
+// a later boot). Health-checking from inside the thing being updated cannot do
+// better; compose `restart: unless-stopped` plus the web healthcheck is the real
+// backstop there.
+scheduleUpdateRunWorker();
+
+// ---------------------------------------------------------------------------
+// Queue print-time / filament estimate backfill
+// ---------------------------------------------------------------------------
+// New submissions are estimated inline at /api/queue/submit. Rows that predate
+// the estimator are filled in here, once, in the background — see
+// server/queueEstimateBackfill.js for why it terminates and why it is
+// best-effort.
+scheduleQueueEstimateBackfill();
+
+// ---------------------------------------------------------------------------
 // Filament Station deferred-assignment replay worker (plan §4, actuation half)
 // ---------------------------------------------------------------------------
 // The Go poller (go-services/cmd/poller/assignments.go) detects a
@@ -7081,13 +7398,45 @@ function scheduleFilamentAssignmentReplayWorker() {
 }
 scheduleFilamentAssignmentReplayWorker();
 
+// Single-container mode only: a second listener carrying just /metrics, so the
+// scrape endpoint stays off the public port now that no nginx 404s it. Bind it
+// to a host that isn't published (or publish it deliberately) — it carries no
+// secrets, only printfarm_web_* request metrics.
+if (METRICS_LISTEN_PORT) {
+  const metricsServer = createServer((req, res) => {
+    const pathname = new URL(req.url || '/', 'http://localhost').pathname;
+    if (pathname !== '/metrics') {
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Not found' }));
+      return;
+    }
+    res.writeHead(200, {
+      'Content-Type': 'text/plain; version=0.0.4; charset=utf-8',
+      'Cache-Control': 'no-store',
+    });
+    res.end(renderMetrics());
+  });
+  metricsServer.listen(METRICS_LISTEN_PORT, process.env.METRICS_LISTEN_HOST || '0.0.0.0', () => {
+    logger.info('metrics listener started', { port: METRICS_LISTEN_PORT });
+  });
+}
+
 const httpServer = createServer(handleRequest);
 httpServer.listen(port, host, () => {
   logger.info('Print Farm server listening', { host, port });
+  // Single-container mode: mount the slicer proxy / MCP server in-process. Done
+  // after listen so a failure to load one of them is logged loudly rather than
+  // preventing the dashboard from serving at all.
+  loadEmbeddedServices().catch((err) => {
+    logger.error('embedded service failed to load', {
+      error: err && err.message ? err.message : String(err),
+    });
+  });
   // Evaluate Home Assistant ⇄ printer automation rules on a background interval.
   startHaAutomationEngine();
-  // ESP32 status-light MQTT broker (raw TCP :1883 + WebSocket upgrade at
-  // /mqtt on this same HTTP server) and its DB→retained-status publisher.
+  // ESP32 status-light MQTT broker (wss-only: WebSocket upgrade at /mqtt on
+  // this same HTTP server, no raw-TCP listener) and its DB→retained-status
+  // publisher.
   startStatusLightBroker({ httpServer }).catch((err) => {
     logger.error('status light broker failed to start', {
       error: err && err.message ? err.message : String(err),

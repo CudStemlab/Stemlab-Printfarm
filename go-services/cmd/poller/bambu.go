@@ -84,9 +84,12 @@ func (c *bambuClient) onMessage(_ mqtt.Client, msg mqtt.Message) {
 		return
 	}
 	c.mu.Lock()
-	for k, v := range printData {
-		c.print[k] = v
-	}
+	// Field-level merge rather than a blind top-level overwrite: everything
+	// after the initial pushall is a partial report, and Bambu firmware sends
+	// empty tag_uid/tray_uuid in those — a wholesale replace of the `ams`
+	// subtree would wipe the RFID identity every consumer downstream depends
+	// on. See bambumerge.go.
+	c.print = mergeBambuReport(c.print, printData)
 	c.lastReport = time.Now()
 	c.mu.Unlock()
 }
@@ -235,8 +238,36 @@ func buildBambuCurrentJob(printData, previousJob pmap, progress int, status stri
 	}
 }
 
+// bambuLoadedSlotID returns the slot whose filament is currently fed to the
+// extruder, or "" when nothing is loaded.
+//
+// Deliberately separate from bambuActiveSpoolID, which folds every tray_now
+// >= 254 into "external" and so cannot tell "the external spool is loaded"
+// (254) from "nothing is loaded at all" (255). The RFID re-read guard needs
+// exactly that distinction — the AMS can only spin a spool past its reader
+// with the filament retracted — and transitions.go depends on
+// bambuActiveSpoolID's existing behavior, so it is left alone.
+func bambuLoadedSlotID(printData pmap) string {
+	amsRoot := asMap(printData["ams"])
+	if amsRoot == nil {
+		return ""
+	}
+	trayNow, ok := mIndex(amsRoot, "tray_now")
+	if !ok || trayNow < 0 || trayNow == 255 {
+		return ""
+	}
+	if trayNow == 254 {
+		if asMap(printData["vt_tray"]) != nil {
+			return "external"
+		}
+		return ""
+	}
+	return fmt.Sprintf("ams%d-%d", trayNow/4, trayNow%4)
+}
+
 func buildBambuSpools(printData pmap) any {
 	var spools []any
+	loadedSlotID := bambuLoadedSlotID(printData)
 	addTray := func(tray any, slotID string) {
 		t := asMap(tray)
 		if t == nil {
@@ -289,9 +320,14 @@ func buildBambuSpools(printData pmap) any {
 			"traySubBrands": strings.TrimSpace(mStr(t, "tray_sub_brands")),
 			"trayUuid":      trayUUID,
 			"tagUid":        tagUID,
-			"nozzleTempMin": mInt(t, "nozzle_temp_min"),
-			"nozzleTempMax": mInt(t, "nozzle_temp_max"),
+			"nozzleTempMin": mIndexDef(t, "nozzle_temp_min", 0),
+			"nozzleTempMax": mIndexDef(t, "nozzle_temp_max", 0),
 			"trayWeight":    fullWeight,
+			// Which slot is actually feeding the extruder. Additive to the
+			// existing spools JSONB (no migration): the frontend uses it for a
+			// per-slot "In Use" badge and to gate the RFID re-read, which the
+			// AMS can only perform with filament retracted.
+			"active": slotID != "" && slotID == loadedSlotID,
 		})
 	}
 
@@ -379,13 +415,16 @@ func rawBambuTrays(printer pmap) map[string]pmap {
 			if unit == nil {
 				continue
 			}
-			unitID := mInt(unit, "id")
+			// mIndex, not mInt: Bambu quotes these ids ("0", "1", …), and mInt
+			// yields 0 for a string — which would key every tray as "0:0" and
+			// collapse the whole AMS onto one slot.
+			unitID := mIndexDef(unit, "id", 0)
 			for _, trayAny := range mSlice(unit, "tray") {
 				tray := asMap(trayAny)
 				if tray == nil {
 					continue
 				}
-				trayID := mInt(tray, "id")
+				trayID := mIndexDef(tray, "id", 0)
 				out[bambuTrayKey(unitID, trayID)] = tray
 			}
 		}

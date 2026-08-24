@@ -41,6 +41,11 @@ func main() {
 	defer engineCancel()
 	startHaAutomationEngine(engineCtx)
 
+	// One-shot backfill of print-time / filament estimates for queue rows that
+	// predate the estimator (mirrors scheduleQueueEstimateBackfill in
+	// server/app.js). Best-effort and self-terminating.
+	startQueueEstimateBackfill(engineCtx)
+
 	srv := &http.Server{
 		Addr:    ":" + strconv.Itoa(webPort),
 		Handler: http.HandlerFunc(handleRequest),

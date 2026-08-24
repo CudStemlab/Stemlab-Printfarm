@@ -90,7 +90,12 @@ export function Dashboard() {
     // status or an active errorMessage (HMS faults like chamber-temp/door-open/
     // spool-empty appear via errorMessage while status may still be printing/idle),
     // so this card stays in sync with the per-printer error shown on each card.
-    error: printers.filter((p) => p.status === 'error' || (p.errorMessage?.trim() ?? '') !== '').length,
+    // `errorMessage` is typed as a string but arrives from the network, so it is
+    // coerced rather than called on directly — a non-string value here used to
+    // throw ("trim is not a function") and take the whole dashboard down with it.
+    error: printers.filter(
+      (p) => p.status === 'error' || String(p.errorMessage ?? '').trim() !== '',
+    ).length,
     paused: printers.filter((p) => p.status === 'paused').length,
     offline: printers.filter((p) => p.status === 'offline').length,
   };

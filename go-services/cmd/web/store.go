@@ -176,6 +176,8 @@ func listQueueJobsByPrintedStatus(ctx context.Context, printedStatus int) (json.
           'progress', 0,
           'estimatedTime', estimated_time,
           'timeRemaining', estimated_time,
+          'estimatedFilament', estimated_filament_grams,
+          'estimateSource', estimate_source,
           'filamentUsed', 0,
           'priority', priority,
           'stlFileUrl', CASE

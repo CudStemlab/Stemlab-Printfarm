@@ -75,7 +75,12 @@ func upsertQueueJobs(ctx context.Context, jobs json.RawMessage) (json.RawMessage
       updated_at = NOW()
     RETURNING
       id, filename, file_count, stl_file_url, submitter_name, submitter_email,
-      notes, submitted_at, priority, estimated_time, form_type, printed_status
+      notes, submitted_at, priority, estimated_time,
+      -- Not in the INSERT column list above: an /api/v1 upsert must not clobber
+      -- an estimate it never carried, so the stored value is preserved on
+      -- conflict and returned here for the response projection.
+      estimated_filament_grams, estimate_source,
+      form_type, printed_status
     )
     SELECT COALESCE(
       json_agg(
@@ -88,6 +93,8 @@ func upsertQueueJobs(ctx context.Context, jobs json.RawMessage) (json.RawMessage
           'progress', 0,
           'estimatedTime', estimated_time,
           'timeRemaining', estimated_time,
+          'estimatedFilament', estimated_filament_grams,
+          'estimateSource', estimate_source,
           'filamentUsed', 0,
           'priority', priority,
           'stlFileUrl', stl_file_url,
@@ -139,6 +146,8 @@ func exportQueueJobs(ctx context.Context, includePrinted bool, ids []string) (js
           'fileCount', file_count,
           'printedStatus', printed_status,
           'estimatedTime', estimated_time,
+          'estimatedFilament', estimated_filament_grams,
+          'estimateSource', estimate_source,
           'priority', priority,
           'stlFileUrl', stl_file_url,
           'submitterName', submitter_name,
@@ -192,6 +201,8 @@ func importQueueJobs(ctx context.Context, jobs json.RawMessage) (int, error) {
         END AS submitted_at,
         COALESCE(data->>'priority', 'low') AS priority,
         COALESCE((data->>'estimatedTime')::integer, 0) AS estimated_time,
+        (data->>'estimatedFilament')::double precision AS estimated_filament_grams,
+        NULLIF(data->>'estimateSource', '') AS estimate_source,
         COALESCE((data->>'printedStatus')::integer, 0) AS printed_status
       FROM input
       WHERE COALESCE(data->>'id', '') <> ''
@@ -199,11 +210,13 @@ func importQueueJobs(ctx context.Context, jobs json.RawMessage) (int, error) {
     upserted AS (
       INSERT INTO queue_jobs (
         id, filename, file_count, stl_file_url, submitter_name, submitter_email,
-        notes, submitted_at, priority, estimated_time, form_type, printed_status
+        notes, submitted_at, priority, estimated_time, form_type, printed_status,
+        estimated_filament_grams, estimate_source
       )
       SELECT
         id, filename, file_count, stl_file_url, submitter_name, submitter_email,
-        notes, submitted_at, priority, estimated_time, $2, printed_status
+        notes, submitted_at, priority, estimated_time, $2, printed_status,
+        estimated_filament_grams, estimate_source
       FROM normalized
       ON CONFLICT (id) DO UPDATE SET
         filename = EXCLUDED.filename,
@@ -215,6 +228,8 @@ func importQueueJobs(ctx context.Context, jobs json.RawMessage) (int, error) {
         submitted_at = EXCLUDED.submitted_at,
         priority = EXCLUDED.priority,
         estimated_time = EXCLUDED.estimated_time,
+        estimated_filament_grams = EXCLUDED.estimated_filament_grams,
+        estimate_source = EXCLUDED.estimate_source,
         printed_status = EXCLUDED.printed_status,
         form_type = EXCLUDED.form_type,
         deleted_at = NULL,
