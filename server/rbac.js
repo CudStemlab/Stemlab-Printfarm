@@ -258,6 +258,9 @@ export function requiredCapability(method, pathname, { publicViewer = false } = 
   // Mutations
   if (PUBLIC_MUTATIONS.has(`${m} ${pathname}`)) return PUBLIC;
   if (m === 'POST' && pathname === '/api/admin/credential') return PUBLIC; // first-run (handler 409s once set)
+  // Same first-run carve-out, for restoring a backup instead of choosing a
+  // fresh password — the handler 409s once an admin password is configured.
+  if (m === 'POST' && pathname === '/api/admin/backup/restore-first-run') return PUBLIC;
   if (pathname === '/api/audit-logs' && m === 'POST') return CAP.AUTHED;
   if (pathname === '/api/auth/slicer-token' && (m === 'POST' || m === 'DELETE')) return CAP.AUTHED;
   const op = operatorMutationCapability(m, pathname);

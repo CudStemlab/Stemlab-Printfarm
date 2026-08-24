@@ -3901,6 +3901,55 @@ async function handleDataApiManagerRequests(req, res, { apiKey, method, id, sub 
   return dataApiMethodNotAllowed(res);
 }
 
+// Spools a backup-archive upload, restores it inside one transaction, and
+// audits the result. Shared by the authenticated /api/admin/backup/restore
+// route and the pre-auth /api/admin/backup/restore-first-run variant below;
+// `session` is only used for audit attribution, so it's `null` for the
+// first-run caller. Throws an Error with a `.status` on any failure — the
+// caller sends the response either way, since the two routes' 409 handling
+// differs upstream of this shared step.
+async function restoreBackupUpload(req, session) {
+  let upload;
+  try {
+    upload = await spoolRequestToTempFile(req, BACKUP_UPLOAD_MAX_BYTES);
+  } catch (error) {
+    if (error instanceof BackupArchiveError && error.tooLarge) {
+      const limitMb = Math.round(BACKUP_UPLOAD_MAX_BYTES / (1024 * 1024));
+      throw Object.assign(new Error(`Backup archive exceeds the ${limitMb} MB upload limit.`), { status: 413 });
+    }
+    logger.error('backup upload failed', { err: error instanceof Error ? error.message : error });
+    throw Object.assign(new Error('Could not read the uploaded archive.'), { status: 500 });
+  }
+
+  let manifest = null;
+  let restoredTables = [];
+  try {
+    const result = await restoreBackupArchive(upload.path);
+    manifest = result.manifest;
+    restoredTables = result.tables;
+  } catch (error) {
+    if (error instanceof BackupArchiveError) {
+      throw Object.assign(new Error(error.message), { status: 400 });
+    }
+    logger.error('backup restore failed', { err: error instanceof Error ? error.message : error });
+    throw Object.assign(new Error('Restore failed; no changes were committed.'), { status: 500 });
+  } finally {
+    await upload.cleanup();
+  }
+
+  await recordAuditLog({
+    actorName: session ? session.name : null,
+    actorUsername: session ? session.username : null,
+    actorRole: session ? session.role : null,
+    action: 'backup.restore',
+    target: null,
+    details: { sourceGeneratedAt: manifest?.generatedAt || null, tables: restoredTables },
+    source: 'web',
+    ip: getClientIp(req),
+  });
+  return restoredTables;
+}
+
 async function handleApi(req, res, requestUrl) {
   if (requestUrl.pathname === '/healthz') {
     sendJson(res, 200, { ok: true }, 'no-store');
@@ -5275,59 +5324,48 @@ async function handleApi(req, res, requestUrl) {
     return true;
   }
 
-  // Restore from a backup archive produced by the endpoint above (or by an
-  // older version — v1 archives, one JSON array per table with inlined base64
-  // file bytes, still restore). Destructive: TRUNCATEs and replaces every table
-  // named in the archive inside one transaction. Admin-only (isAdminMutation)
-  // and audited. The upload is the raw zip bytes as the request body (not
-  // multipart) — simpler for a single-file upload, matching the
-  // /api/v1/queue/:id/file PUT pattern — and is spooled to a temp file rather
-  // than buffered, so the archive size is bounded by disk, not by RAM.
+  // Restore from a backup archive produced by the download endpoint above (or
+  // by an older version — v1 archives, one JSON array per table with inlined
+  // base64 file bytes, still restore). Destructive: TRUNCATEs and replaces
+  // every table named in the archive inside one transaction. The upload is the
+  // raw zip bytes as the request body (not multipart) — simpler for a
+  // single-file upload, matching the /api/v1/queue/:id/file PUT pattern — and
+  // is spooled to a temp file rather than buffered, so the archive size is
+  // bounded by disk, not by RAM.
   if (requestUrl.pathname === '/api/admin/backup/restore' && req.method === 'POST') {
-    let upload;
-    try {
-      upload = await spoolRequestToTempFile(req, BACKUP_UPLOAD_MAX_BYTES);
-    } catch (error) {
-      if (error instanceof BackupArchiveError && error.tooLarge) {
-        const limitMb = Math.round(BACKUP_UPLOAD_MAX_BYTES / (1024 * 1024));
-        sendJson(res, 413, { error: `Backup archive exceeds the ${limitMb} MB upload limit.` });
-        return true;
-      }
-      logger.error('backup upload failed', { err: error instanceof Error ? error.message : error });
-      sendJson(res, 500, { error: 'Could not read the uploaded archive.' });
-      return true;
-    }
-
     const session = await resolveSession(req);
-    let manifest = null;
-    let restoredTables = [];
     try {
-      const result = await restoreBackupArchive(upload.path);
-      manifest = result.manifest;
-      restoredTables = result.tables;
+      const restoredTables = await restoreBackupUpload(req, session);
+      sendJson(res, 200, { ok: true, tables: restoredTables });
     } catch (error) {
-      if (error instanceof BackupArchiveError) {
-        sendJson(res, 400, { error: error.message });
-        return true;
-      }
-      logger.error('backup restore failed', { err: error instanceof Error ? error.message : error });
-      sendJson(res, 500, { error: 'Restore failed; no changes were committed.' });
-      return true;
-    } finally {
-      await upload.cleanup();
+      sendJson(res, error.status || 500, { error: error.message || 'Restore failed; no changes were committed.' });
     }
+    return true;
+  }
 
-    await recordAuditLog({
-      actorName: session ? session.name : null,
-      actorUsername: session ? session.username : null,
-      actorRole: session ? session.role : null,
-      action: 'backup.restore',
-      target: null,
-      details: { sourceGeneratedAt: manifest?.generatedAt || null, tables: restoredTables },
-      source: 'web',
-      ip: getClientIp(req),
-    });
-    sendJson(res, 200, { ok: true, tables: restoredTables });
+  // Pre-auth counterpart to the route above, reachable only while no admin
+  // password has been set yet (same one-shot trust model as the POST
+  // /api/admin/credential first-run carve-out below: whoever reaches the
+  // fresh instance first can complete setup, here by restoring a prior
+  // instance's data instead of choosing a new password). Restoring a backup
+  // also restores `app_settings` — where the admin password hash lives — so
+  // this re-establishes the *original* admin credential; the caller logs in
+  // afterward rather than being auto-signed-in, since the server never learns
+  // the plaintext password. Permanently 409s once an admin password exists,
+  // matching /api/admin/credential's POST.
+  if (requestUrl.pathname === '/api/admin/backup/restore-first-run' && req.method === 'POST') {
+    const stored = await getAppSetting(ADMIN_CREDENTIAL_KEY);
+    const storedHash = stored && typeof stored.passwordHash === 'string' ? stored.passwordHash : '';
+    if (storedHash.length > 0) {
+      sendJson(res, 409, { error: 'Admin password is already configured' });
+      return true;
+    }
+    try {
+      const restoredTables = await restoreBackupUpload(req, null);
+      sendJson(res, 200, { ok: true, tables: restoredTables });
+    } catch (error) {
+      sendJson(res, error.status || 500, { error: error.message || 'Restore failed; no changes were committed.' });
+    }
     return true;
   }
 
